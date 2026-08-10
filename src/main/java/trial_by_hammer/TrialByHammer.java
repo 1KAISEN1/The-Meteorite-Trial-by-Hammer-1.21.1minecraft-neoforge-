@@ -30,6 +30,7 @@ import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
+import trial_by_hammer.worldgen.ModWorldGeneration;
 
 // The value here should match an entry in the META-INF/neoforge.mods.toml file
 @Mod(TrialByHammer.MODID)
@@ -89,6 +90,8 @@ public class TrialByHammer {
     }
 
     private void commonSetup(FMLCommonSetupEvent event) {
+        event.enqueueWork(ModWorldGeneration::register);
+
         // Some common setup code
         LOGGER.info("HELLO FROM COMMON SETUP");
 

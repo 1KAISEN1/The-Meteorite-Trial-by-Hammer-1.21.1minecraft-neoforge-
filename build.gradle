@@ -28,7 +28,10 @@ sourceSets.main.resources {
 }
 
 repositories {
-    // Add here additional repositories if required by some of the dependencies below.
+    maven {
+        name = 'Forge'
+        url = 'https://maven.minecraftforge.net'
+    }
 }
 
 base {
@@ -134,6 +137,8 @@ dependencies {
     // Example project dependency using a sister or child project:
     // implementation project(":myproject")
 
+    implementation "com.github.glitchfiend:TerraBlender-neoforge:${minecraft_version}-${terrablender_version}"
+
     // For more info:
     // http://www.gradle.org/docs/current/userguide/artifact_dependencies_tutorial.html
     // http://www.gradle.org/docs/current/userguide/dependency_management.html
@@ -151,6 +156,7 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
             mod_name               : mod_name,
             mod_license            : mod_license,
             mod_version            : mod_version,
+            terrablender_version   : terrablender_version,
     ]
     inputs.properties replaceProperties
     expand replaceProperties

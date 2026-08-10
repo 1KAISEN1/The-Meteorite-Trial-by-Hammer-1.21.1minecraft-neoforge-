@@ -9,5 +9,6 @@
     "trial_by_hammer.configuration.logDirtBlock":  "Log Dirt Block",
     "trial_by_hammer.configuration.magicNumberIntroduction":  "Magic Number Text",
     "trial_by_hammer.configuration.magicNumber":  "Magic Number",
-    "fml.menu.mods.info.description.trial_by_hammer":  "A mod that adds forging content"
+    "fml.menu.mods.info.description.trial_by_hammer":  "A mod that adds forging content",
+    "biome.trial_by_hammer.meteorite_desert":  "Meteorite Desert"
 }
