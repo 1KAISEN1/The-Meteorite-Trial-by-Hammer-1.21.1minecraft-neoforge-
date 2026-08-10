@@ -35,11 +35,6 @@ public final class ModWorkshopBlocks {
     public static final DeferredBlock<Block> TWISTING_FIXTURE = registerMetalStation("twisting_fixture");
     public static final DeferredBlock<Block> CASTING_MOLD_TABLE = registerWoodenStation("casting_mold_table");
 
-    public static final DeferredBlock<Block> WATER_WHEEL = registerWoodenStation("water_wheel");
-    public static final DeferredBlock<Block> DRIVE_SHAFT = registerWoodenStation("drive_shaft");
-    public static final DeferredBlock<Block> WATER_BELLOWS = registerWoodenStation("water_bellows");
-    public static final DeferredBlock<Block> TRIP_HAMMER = registerMetalStation("trip_hammer");
-
     public static final DeferredItem<BlockItem> FORGE_HEARTH_ITEM = registerItem("forge_hearth", FORGE_HEARTH);
     public static final DeferredItem<BlockItem> SMITHING_ANVIL_ITEM = registerItem("smithing_anvil", SMITHING_ANVIL);
     public static final DeferredItem<BlockItem> QUENCHING_BASIN_ITEM = registerItem("quenching_basin", QUENCHING_BASIN);
@@ -55,11 +50,6 @@ public final class ModWorkshopBlocks {
     public static final DeferredItem<BlockItem> TWISTING_FIXTURE_ITEM = registerItem("twisting_fixture", TWISTING_FIXTURE);
     public static final DeferredItem<BlockItem> CASTING_MOLD_TABLE_ITEM = registerItem("casting_mold_table", CASTING_MOLD_TABLE);
 
-    public static final DeferredItem<BlockItem> WATER_WHEEL_ITEM = registerItem("water_wheel", WATER_WHEEL);
-    public static final DeferredItem<BlockItem> DRIVE_SHAFT_ITEM = registerItem("drive_shaft", DRIVE_SHAFT);
-    public static final DeferredItem<BlockItem> WATER_BELLOWS_ITEM = registerItem("water_bellows", WATER_BELLOWS);
-    public static final DeferredItem<BlockItem> TRIP_HAMMER_ITEM = registerItem("trip_hammer", TRIP_HAMMER);
-
     private ModWorkshopBlocks() {
     }
 
@@ -72,8 +62,8 @@ public final class ModWorkshopBlocks {
     }
 
     /**
-     * 木工和水力传动工位暂时使用木质占位属性，后续再按受力和可燃性分别细化。
-     * Woodworking and water-power stations temporarily use wooden placeholder properties, to be refined later for load and flammability.
+     * 木工工位暂时使用木质占位属性，后续再按受力和可燃性分别细化。
+     * Woodworking stations temporarily use wooden placeholder properties, to be refined later for load and flammability.
      */
     private static DeferredBlock<Block> registerWoodenStation(String name) {
         return BLOCKS.registerSimpleBlock(name, BlockBehaviour.Properties.ofFullCopy(Blocks.OAK_PLANKS));

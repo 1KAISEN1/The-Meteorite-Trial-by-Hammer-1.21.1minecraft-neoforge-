@@ -72,10 +72,6 @@ public class TrialByHammer {
                 output.accept(ModWorkshopBlocks.COFUSION_FURNACE_ITEM.get());
                 output.accept(ModWorkshopBlocks.TWISTING_FIXTURE_ITEM.get());
                 output.accept(ModWorkshopBlocks.CASTING_MOLD_TABLE_ITEM.get());
-                output.accept(ModWorkshopBlocks.WATER_WHEEL_ITEM.get());
-                output.accept(ModWorkshopBlocks.DRIVE_SHAFT_ITEM.get());
-                output.accept(ModWorkshopBlocks.WATER_BELLOWS_ITEM.get());
-                output.accept(ModWorkshopBlocks.TRIP_HAMMER_ITEM.get());
             }).build());
 
     public TrialByHammer(IEventBus modEventBus) {
