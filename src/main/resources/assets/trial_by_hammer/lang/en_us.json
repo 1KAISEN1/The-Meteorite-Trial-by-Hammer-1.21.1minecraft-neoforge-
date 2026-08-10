@@ -2,6 +2,7 @@
     "itemGroup.trial_by_hammer":  "The Meteorite: Trial by Hammer Tab",
     "block.trial_by_hammer.example_block":  "Example Block",
     "item.trial_by_hammer.example_item":  "Example Item",
+    "item.trial_by_hammer.meteorite_ingot":  "Meteorite Ingot",
     "trial_by_hammer.configuration.title":  "The Meteorite: Trial by Hammer Configs",
     "trial_by_hammer.configuration.section.trial_by_hammer.common.toml":  "The Meteorite: Trial by Hammer Configs",
     "trial_by_hammer.configuration.section.trial_by_hammer.common.toml.title":  "The Meteorite: Trial by Hammer Configs",
