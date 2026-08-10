@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/handheld",
+  "textures": {
+    "layer0": "trial_by_hammer:item/artisan_hammer"
+  }
+}

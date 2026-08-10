@@ -1,15 +1,10 @@
 {
     "itemGroup.trial_by_hammer":  "The Meteorite: Trial by Hammer Tab",
-    "block.trial_by_hammer.example_block":  "Example Block",
-    "item.trial_by_hammer.example_item":  "Example Item",
+    "block.trial_by_hammer.meteorite_ore":  "Meteorite Ore",
+    "block.trial_by_hammer.meteorite_sand":  "Meteorite Sand",
     "item.trial_by_hammer.meteorite_ingot":  "Meteorite Ingot",
-    "trial_by_hammer.configuration.title":  "The Meteorite: Trial by Hammer Configs",
-    "trial_by_hammer.configuration.section.trial_by_hammer.common.toml":  "The Meteorite: Trial by Hammer Configs",
-    "trial_by_hammer.configuration.section.trial_by_hammer.common.toml.title":  "The Meteorite: Trial by Hammer Configs",
-    "trial_by_hammer.configuration.items":  "Item List",
-    "trial_by_hammer.configuration.logDirtBlock":  "Log Dirt Block",
-    "trial_by_hammer.configuration.magicNumberIntroduction":  "Magic Number Text",
-    "trial_by_hammer.configuration.magicNumber":  "Magic Number",
+    "item.trial_by_hammer.unrefined_meteorite_ore":  "Unrefined Meteorite Ore",
+    "item.trial_by_hammer.artisan_hammer":  "Artisan Hammer",
     "fml.menu.mods.info.description.trial_by_hammer":  "A mod that adds forging content",
     "biome.trial_by_hammer.meteorite_desert":  "Meteorite Desert"
 }
