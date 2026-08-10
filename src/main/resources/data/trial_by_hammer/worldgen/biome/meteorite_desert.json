@@ -6,9 +6,9 @@
       "minecraft:canyon"
     ]
   },
-  "downfall": 0.0,
+  "downfall": 0.1,
   "effects": {
-    "fog_color": 12638463,
+    "fog_color": 14996727,
     "mood_sound": {
       "block_search_extent": 8,
       "offset": 2.0,
@@ -21,7 +21,7 @@
       "replace_current_music": false,
       "sound": "minecraft:music.overworld.desert"
     },
-    "sky_color": 7515647,
+    "sky_color": 13675007,
     "water_color": 4159204,
     "water_fog_color": 329011
   },
@@ -88,7 +88,7 @@
       "minecraft:red_mushroom_normal",
       "minecraft:patch_sugar_cane_desert",
       "minecraft:patch_pumpkin",
-      "minecraft:patch_cactus_desert"
+      "trial_by_hammer:patch_cactus_desert_half"
     ],
     [
       "minecraft:freeze_top_layer"

@@ -89,9 +89,9 @@ A mod that adds forging content
     side="BOTH"
 
 [[dependencies.${mod_id}]]
-    modId="terrablender"
+    modId="lithostitched"
     type="required"
-    versionRange="[${terrablender_version},)"
+    versionRange="[1.7.13,)"
     ordering="AFTER"
     side="BOTH"
 

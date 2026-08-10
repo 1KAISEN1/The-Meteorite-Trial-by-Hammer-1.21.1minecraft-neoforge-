@@ -1,44 +1,30 @@
 package trial_by_hammer;
 
-import org.slf4j.Logger;
-
-import com.mojang.logging.LogUtils;
-
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.food.FoodProperties;
+import net.minecraft.util.ColorRGBA;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.ColoredFallingBlock;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.material.MapColor;
-import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
-import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.Mod;
-import net.neoforged.fml.config.ModConfig;
-import net.neoforged.fml.ModContainer;
-import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
-import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
-import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
-import trial_by_hammer.worldgen.ModWorldGeneration;
+import trial_by_hammer.worldgen.structure.ModStructures;
 
 // The value here should match an entry in the META-INF/neoforge.mods.toml file
 @Mod(TrialByHammer.MODID)
 public class TrialByHammer {
     // Define mod id in a common place for everything to reference
     public static final String MODID = "trial_by_hammer";
-    // Directly reference a slf4j logger
-    public static final Logger LOGGER = LogUtils.getLogger();
     // Create a Deferred Register to hold Blocks which will all be registered under the "trial_by_hammer" namespace
     public static final DeferredRegister.Blocks BLOCKS = DeferredRegister.createBlocks(MODID);
     // Create a Deferred Register to hold Items which will all be registered under the "trial_by_hammer" namespace
@@ -46,78 +32,43 @@ public class TrialByHammer {
     // Create a Deferred Register to hold CreativeModeTabs which will all be registered under the "trial_by_hammer" namespace
     public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS = DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
 
-    // Creates a new Block with the id "trial_by_hammer:example_block", combining the namespace and path
-    public static final DeferredBlock<Block> EXAMPLE_BLOCK = BLOCKS.registerSimpleBlock("example_block", BlockBehaviour.Properties.of().mapColor(MapColor.STONE));
-    // Creates a new BlockItem with the id "trial_by_hammer:example_block", combining the namespace and path
-    public static final DeferredItem<BlockItem> EXAMPLE_BLOCK_ITEM = ITEMS.registerSimpleBlockItem("example_block", EXAMPLE_BLOCK);
+    public static final DeferredBlock<Block> METEORITE_ORE = BLOCKS.registerSimpleBlock(
+            "meteorite_ore", BlockBehaviour.Properties.ofFullCopy(Blocks.OBSIDIAN));
+    public static final DeferredItem<BlockItem> METEORITE_ORE_ITEM = ITEMS.registerSimpleBlockItem("meteorite_ore", METEORITE_ORE);
 
-    // Creates a new food item with the id "trial_by_hammer:example_id", nutrition 1 and saturation 2
-    public static final DeferredItem<Item> EXAMPLE_ITEM = ITEMS.registerSimpleItem("example_item", new Item.Properties().food(new FoodProperties.Builder()
-            .alwaysEdible().nutrition(1).saturationModifier(2f).build()));
+    public static final DeferredBlock<ColoredFallingBlock> METEORITE_SAND = BLOCKS.registerBlock(
+            "meteorite_sand",
+            properties -> new ColoredFallingBlock(new ColorRGBA(0xD0C3E2), properties),
+            BlockBehaviour.Properties.ofFullCopy(Blocks.SAND).mapColor(MapColor.COLOR_MAGENTA));
+    public static final DeferredItem<BlockItem> METEORITE_SAND_ITEM = ITEMS.registerSimpleBlockItem(
+            "meteorite_sand", METEORITE_SAND);
 
     public static final DeferredItem<Item> METEORITE_INGOT = ITEMS.registerSimpleItem("meteorite_ingot", new Item.Properties());
+    public static final DeferredItem<Item> UNREFINED_METEORITE_ORE = ITEMS.registerSimpleItem(
+            "unrefined_meteorite_ore", new Item.Properties());
+    public static final DeferredItem<Item> ARTISAN_HAMMER = ITEMS.registerSimpleItem(
+            "artisan_hammer", new Item.Properties().stacksTo(1));
 
-    // Creates a creative tab with the id "trial_by_hammer:example_tab" for the example item, that is placed after the combat tab
-    public static final DeferredHolder<CreativeModeTab, CreativeModeTab> EXAMPLE_TAB = CREATIVE_MODE_TABS.register("example_tab", () -> CreativeModeTab.builder()
+    public static final DeferredHolder<CreativeModeTab, CreativeModeTab> TRIAL_BY_HAMMER_TAB = CREATIVE_MODE_TABS.register("trial_by_hammer", () -> CreativeModeTab.builder()
             .title(Component.translatable("itemGroup.trial_by_hammer")) //The language key for the title of your CreativeModeTab
             .withTabsBefore(CreativeModeTabs.COMBAT)
-            .icon(() -> EXAMPLE_ITEM.get().getDefaultInstance())
+            .icon(() -> METEORITE_INGOT.get().getDefaultInstance())
             .displayItems((parameters, output) -> {
-                output.accept(EXAMPLE_ITEM.get());// Add the example item to the tab. For your own tabs, this method is preferred over the event
+                output.accept(METEORITE_ORE_ITEM.get());
+                output.accept(METEORITE_SAND_ITEM.get());
+                output.accept(UNREFINED_METEORITE_ORE.get());
                 output.accept(METEORITE_INGOT.get());
+                output.accept(ARTISAN_HAMMER.get());
             }).build());
 
-    // The constructor for the mod class is the first code that is run when your mod is loaded.
-    // FML will recognize some parameter types like IEventBus or ModContainer and pass them in automatically.
-    public TrialByHammer(IEventBus modEventBus, ModContainer modContainer) {
-        // Register the commonSetup method for modloading
-        modEventBus.addListener(this::commonSetup);
-
+    public TrialByHammer(IEventBus modEventBus) {
         // Register the Deferred Register to the mod event bus so blocks get registered
         BLOCKS.register(modEventBus);
         // Register the Deferred Register to the mod event bus so items get registered
         ITEMS.register(modEventBus);
         // Register the Deferred Register to the mod event bus so tabs get registered
         CREATIVE_MODE_TABS.register(modEventBus);
+        ModStructures.register(modEventBus);
 
-        // Register ourselves for server and other game events we are interested in.
-        // Note that this is necessary if and only if we want *this* class (TrialByHammer) to respond directly to events.
-        // Do not add this line if there are no @SubscribeEvent-annotated functions in this class, like onServerStarting() below.
-        NeoForge.EVENT_BUS.register(this);
-
-        // Register the item to a creative tab
-        modEventBus.addListener(this::addCreative);
-
-        // Register our mod's ModConfigSpec so that FML can create and load the config file for us
-        modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
-    }
-
-    private void commonSetup(FMLCommonSetupEvent event) {
-        event.enqueueWork(ModWorldGeneration::register);
-
-        // Some common setup code
-        LOGGER.info("HELLO FROM COMMON SETUP");
-
-        if (Config.LOG_DIRT_BLOCK.getAsBoolean()) {
-            LOGGER.info("DIRT BLOCK >> {}", BuiltInRegistries.BLOCK.getKey(Blocks.DIRT));
-        }
-
-        LOGGER.info("{}{}", Config.MAGIC_NUMBER_INTRODUCTION.get(), Config.MAGIC_NUMBER.getAsInt());
-
-        Config.ITEM_STRINGS.get().forEach((item) -> LOGGER.info("ITEM >> {}", item));
-    }
-
-    // Add the example block item to the building blocks tab
-    private void addCreative(BuildCreativeModeTabContentsEvent event) {
-        if (event.getTabKey() == CreativeModeTabs.BUILDING_BLOCKS) {
-            event.accept(EXAMPLE_BLOCK_ITEM);
-        }
-    }
-
-    // You can use SubscribeEvent and let the Event Bus discover methods to call
-    @SubscribeEvent
-    public void onServerStarting(ServerStartingEvent event) {
-        // Do something when the server starts
-        LOGGER.info("HELLO from server starting");
     }
 }

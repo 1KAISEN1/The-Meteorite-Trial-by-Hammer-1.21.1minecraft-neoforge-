@@ -1,0 +1,14 @@
+{
+  "placement": {
+    "type": "minecraft:random_spread",
+    "salt": 19461107,
+    "separation": 6,
+    "spacing": 8
+  },
+  "structures": [
+    {
+      "structure": "trial_by_hammer:meteorite_crater",
+      "weight": 1
+    }
+  ]
+}

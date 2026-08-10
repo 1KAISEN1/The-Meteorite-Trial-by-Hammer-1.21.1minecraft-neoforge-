@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:block/cube_all",
+  "textures": {
+    "all": "trial_by_hammer:block/meteorite_ore"
+  }
+}

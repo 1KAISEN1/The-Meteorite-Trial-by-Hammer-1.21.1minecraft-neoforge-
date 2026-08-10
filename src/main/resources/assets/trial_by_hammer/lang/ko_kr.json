@@ -1,4 +1,8 @@
 {
     "fml.menu.mods.info.description.trial_by_hammer":  "이 모드는 더 많은 단조(대장간 작업) 디테일을 추가했습니다",
-    "item.trial_by_hammer.meteorite_ingot":  "운철 주괴"
+    "block.trial_by_hammer.meteorite_ore":  "운철 광석",
+    "block.trial_by_hammer.meteorite_sand":  "운석 모래",
+    "item.trial_by_hammer.meteorite_ingot":  "운철 주괴",
+    "item.trial_by_hammer.unrefined_meteorite_ore":  "정제되지 않은 운철 광석",
+    "item.trial_by_hammer.artisan_hammer":  "장인의 망치"
 }
