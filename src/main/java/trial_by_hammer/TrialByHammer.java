@@ -18,6 +18,7 @@ import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
+import trial_by_hammer.content.ModWorkshopBlocks;
 import trial_by_hammer.worldgen.structure.ModStructures;
 
 // 此值必须与 META-INF/neoforge.mods.toml 中的条目一致 / This value must match an entry in META-INF/neoforge.mods.toml.
@@ -59,6 +60,22 @@ public class TrialByHammer {
                 output.accept(UNREFINED_METEORITE_ORE.get());
                 output.accept(METEORITE_INGOT.get());
                 output.accept(ARTISAN_HAMMER.get());
+                output.accept(ModWorkshopBlocks.FORGE_HEARTH_ITEM.get());
+                output.accept(ModWorkshopBlocks.SMITHING_ANVIL_ITEM.get());
+                output.accept(ModWorkshopBlocks.QUENCHING_BASIN_ITEM.get());
+                output.accept(ModWorkshopBlocks.HEAT_TREATMENT_FURNACE_ITEM.get());
+                output.accept(ModWorkshopBlocks.GRINDING_WHEEL_ITEM.get());
+                output.accept(ModWorkshopBlocks.HAFTING_BENCH_ITEM.get());
+                output.accept(ModWorkshopBlocks.BLOOMERY_FURNACE_ITEM.get());
+                output.accept(ModWorkshopBlocks.FINERY_HEARTH_ITEM.get());
+                output.accept(ModWorkshopBlocks.CARBURIZING_CHEST_ITEM.get());
+                output.accept(ModWorkshopBlocks.COFUSION_FURNACE_ITEM.get());
+                output.accept(ModWorkshopBlocks.TWISTING_FIXTURE_ITEM.get());
+                output.accept(ModWorkshopBlocks.CASTING_MOLD_TABLE_ITEM.get());
+                output.accept(ModWorkshopBlocks.WATER_WHEEL_ITEM.get());
+                output.accept(ModWorkshopBlocks.DRIVE_SHAFT_ITEM.get());
+                output.accept(ModWorkshopBlocks.WATER_BELLOWS_ITEM.get());
+                output.accept(ModWorkshopBlocks.TRIP_HAMMER_ITEM.get());
             }).build());
 
     public TrialByHammer(IEventBus modEventBus) {
@@ -66,6 +83,9 @@ public class TrialByHammer {
         BLOCKS.register(modEventBus);
         // 将物品延迟注册器挂接到模组事件总线 / Register the item deferred register on the mod event bus.
         ITEMS.register(modEventBus);
+        // 将工坊测试方块及其物品注册到事件总线；工艺行为在后续里程碑单独实现。
+        // Register workshop test blocks and items on the event bus; process behavior will be implemented in later milestones.
+        ModWorkshopBlocks.register(modEventBus);
         // 将创造模式标签页延迟注册器挂接到模组事件总线 / Register the creative-mode-tab deferred register on the mod event bus.
         CREATIVE_MODE_TABS.register(modEventBus);
         ModStructures.register(modEventBus);
