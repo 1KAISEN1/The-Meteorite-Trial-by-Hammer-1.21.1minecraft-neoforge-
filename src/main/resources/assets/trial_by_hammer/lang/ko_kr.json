@@ -16,5 +16,17 @@
     "block.trial_by_hammer.meteorite_sand":  "운석 모래",
     "item.trial_by_hammer.meteorite_ingot":  "운철 주괴",
     "item.trial_by_hammer.unrefined_meteorite_ore":  "정제되지 않은 운철 광석",
-    "item.trial_by_hammer.artisan_hammer":  "장인의 망치"
+    "item.trial_by_hammer.artisan_hammer":  "장인의 망치",
+    "item.trial_by_hammer.tongs": "집게",
+    "item.trial_by_hammer.thickness_gauge": "두께 측정기",
+    "item.trial_by_hammer.iron_workpiece": "철 소재",
+    "message.trial_by_hammer.anvil_empty": "먼저 철 소재를 단조 모루 위에 올려놓으세요.",
+    "screen.trial_by_hammer.forging": "단조 화면",
+    "screen.trial_by_hammer.prototype_notice": "기술 프로토타입 — 형상 및 도구 상호작용이 활성화되었습니다",
+    "screen.trial_by_hammer.no_tools": "인벤토리에 사용 가능한 단조 도구가 없습니다",
+    "screen.trial_by_hammer.force": "힘: %s/10",
+    "screen.trial_by_hammer.thickness_pending": "두께: 가공물 대기 중",
+    "screen.trial_by_hammer.thickness": "두께: %s 블록 (%s 재료 셀)",
+    "screen.trial_by_hammer.tongs_help": "왼쪽 버튼 유지: 연속 이동 | 휠: 회전 | 오른쪽: 뒤집기",
+    "screen.trial_by_hammer.test_temperature": "시험 온도: %s°C (↑/↓ 조절)"
 }

@@ -9,6 +9,7 @@ import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import trial_by_hammer.TrialByHammer;
+import trial_by_hammer.content.block.SmithingAnvilBlock;
 
 /**
  * 锻造工坊方块的注册清单；当前只提供可辨识的测试占位方块，不提前实现工艺逻辑。
@@ -21,7 +22,10 @@ public final class ModWorkshopBlocks {
     public static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(TrialByHammer.MODID);
 
     public static final DeferredBlock<Block> FORGE_HEARTH = registerMetalStation("forge_hearth");
-    public static final DeferredBlock<Block> SMITHING_ANVIL = registerMetalStation("smithing_anvil");
+    public static final DeferredBlock<SmithingAnvilBlock> SMITHING_ANVIL = BLOCKS.registerBlock(
+            "smithing_anvil",
+            SmithingAnvilBlock::new,
+            BlockBehaviour.Properties.ofFullCopy(Blocks.SMITHING_TABLE));
     public static final DeferredBlock<Block> QUENCHING_BASIN = registerMetalStation("quenching_basin");
     public static final DeferredBlock<Block> HEAT_TREATMENT_FURNACE = registerMetalStation("heat_treatment_furnace");
     public static final DeferredBlock<Block> GRINDING_WHEEL = registerMetalStation("grinding_wheel");
@@ -69,7 +73,7 @@ public final class ModWorkshopBlocks {
         return BLOCKS.registerSimpleBlock(name, BlockBehaviour.Properties.ofFullCopy(Blocks.OAK_PLANKS));
     }
 
-    private static DeferredItem<BlockItem> registerItem(String name, DeferredBlock<Block> block) {
+    private static <T extends Block> DeferredItem<BlockItem> registerItem(String name, DeferredBlock<T> block) {
         return ITEMS.registerSimpleBlockItem(name, block);
     }
 

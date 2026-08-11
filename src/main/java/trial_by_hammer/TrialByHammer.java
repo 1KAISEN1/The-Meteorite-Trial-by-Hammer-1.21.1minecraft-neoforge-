@@ -19,6 +19,10 @@ import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import trial_by_hammer.content.ModWorkshopBlocks;
+import trial_by_hammer.content.ModBlockEntities;
+import trial_by_hammer.forging.ModDataComponents;
+import trial_by_hammer.menu.ModMenus;
+import trial_by_hammer.network.ModNetworking;
 import trial_by_hammer.worldgen.structure.ModStructures;
 
 // 此值必须与 META-INF/neoforge.mods.toml 中的条目一致 / This value must match an entry in META-INF/neoforge.mods.toml.
@@ -49,6 +53,12 @@ public class TrialByHammer {
             "unrefined_meteorite_ore", new Item.Properties());
     public static final DeferredItem<Item> ARTISAN_HAMMER = ITEMS.registerSimpleItem(
             "artisan_hammer", new Item.Properties().stacksTo(1));
+    public static final DeferredItem<Item> TONGS = ITEMS.registerSimpleItem(
+            "tongs", new Item.Properties().stacksTo(1));
+    public static final DeferredItem<Item> THICKNESS_GAUGE = ITEMS.registerSimpleItem(
+            "thickness_gauge", new Item.Properties().stacksTo(1));
+    public static final DeferredItem<Item> IRON_WORKPIECE = ITEMS.registerSimpleItem(
+            "iron_workpiece", new Item.Properties().stacksTo(1));
 
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> TRIAL_BY_HAMMER_TAB = CREATIVE_MODE_TABS.register("trial_by_hammer", () -> CreativeModeTab.builder()
             .title(Component.translatable("itemGroup.trial_by_hammer")) // 创造模式标签页标题的语言键 / Language key for the creative-mode tab title.
@@ -60,6 +70,9 @@ public class TrialByHammer {
                 output.accept(UNREFINED_METEORITE_ORE.get());
                 output.accept(METEORITE_INGOT.get());
                 output.accept(ARTISAN_HAMMER.get());
+                output.accept(TONGS.get());
+                output.accept(THICKNESS_GAUGE.get());
+                output.accept(IRON_WORKPIECE.get());
                 output.accept(ModWorkshopBlocks.FORGE_HEARTH_ITEM.get());
                 output.accept(ModWorkshopBlocks.SMITHING_ANVIL_ITEM.get());
                 output.accept(ModWorkshopBlocks.QUENCHING_BASIN_ITEM.get());
@@ -79,9 +92,15 @@ public class TrialByHammer {
         BLOCKS.register(modEventBus);
         // 将物品延迟注册器挂接到模组事件总线 / Register the item deferred register on the mod event bus.
         ITEMS.register(modEventBus);
-        // 将工坊测试方块及其物品注册到事件总线；工艺行为在后续里程碑单独实现。
-        // Register workshop test blocks and items on the event bus; process behavior will be implemented in later milestones.
+        // 注册工坊方块与物品；本里程碑启用锻造砧，其余工位仍保持占位。
+        // Register workshop blocks and items; this milestone activates the smithing anvil while other stations remain placeholders.
         ModWorkshopBlocks.register(modEventBus);
+        ModBlockEntities.register(modEventBus);
+        ModDataComponents.register(modEventBus);
+        ModNetworking.register(modEventBus);
+        // 注册锻造界面的菜单类型；界面渲染本身只在客户端加载。
+        // Register the forging menu type; the screen renderer itself is loaded only on the client.
+        ModMenus.register(modEventBus);
         // 将创造模式标签页延迟注册器挂接到模组事件总线 / Register the creative-mode-tab deferred register on the mod event bus.
         CREATIVE_MODE_TABS.register(modEventBus);
         ModStructures.register(modEventBus);

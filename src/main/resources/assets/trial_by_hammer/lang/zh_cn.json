@@ -16,5 +16,17 @@
     "block.trial_by_hammer.meteorite_sand":  "陨石沙",
     "item.trial_by_hammer.meteorite_ingot":  "陨铁锭",
     "item.trial_by_hammer.unrefined_meteorite_ore":  "未提纯的陨铁矿石",
-    "item.trial_by_hammer.artisan_hammer":  "工匠锤"
+    "item.trial_by_hammer.artisan_hammer":  "工匠锤",
+    "item.trial_by_hammer.tongs": "钳子",
+    "item.trial_by_hammer.thickness_gauge": "厚度测试仪",
+    "item.trial_by_hammer.iron_workpiece": "铁工件",
+    "message.trial_by_hammer.anvil_empty": "请先把铁工件放到锻造砧上。",
+    "screen.trial_by_hammer.forging": "锻造视图",
+    "screen.trial_by_hammer.prototype_notice": "技术原型——几何与工具交互已接入",
+    "screen.trial_by_hammer.no_tools": "背包中没有可用的锻造工具",
+    "screen.trial_by_hammer.force": "力度：%s/10",
+    "screen.trial_by_hammer.thickness_pending": "厚度：等待工件",
+    "screen.trial_by_hammer.thickness": "厚度：%s 格（%s 个材料格）",
+    "screen.trial_by_hammer.tongs_help": "按住左键：连续移动｜滚轮：旋转｜右键：翻面",
+    "screen.trial_by_hammer.test_temperature": "测试温度：%s°C（↑/↓ 调节）"
 }
