@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "trial_by_hammer:block/heat_treatment_furnace"
+    }
+  }
+}

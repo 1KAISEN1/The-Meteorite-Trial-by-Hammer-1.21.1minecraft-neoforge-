@@ -1,0 +1,4 @@
+{
+  "parent": "minecraft:block/cube_all",
+  "textures": {"all": "trial_by_hammer:block/twisting_fixture"}
+}
