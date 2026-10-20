@@ -1,0 +1,38 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "MIT"
+
+[[mods]]
+modId = "trial_by_hammer"
+version = "${file.jarVersion}"
+displayName = "Trial by Hammer"
+authors = "KAISEN1"
+description = '''
+以陨铁、合金与锻造为核心的内容模组。
+陨铁中的"天外因子"只有在形成合金并经过可控的熔炼与锻造后才会显现。
+'''
+
+# NeoForge 是硬依赖：没有加载器一切都不成立。
+[[dependencies.trial_by_hammer]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1.0,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.trial_by_hammer]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,1.22)"
+ordering = "NONE"
+side = "BOTH"
+
+# Create 目前先声明为 required，因为后续所有工艺都要接它的动力学与 Ponder。
+# NOTE: 如果之后要提供"无 Create 也能玩"的独立模式，把这里改成 optional，
+#       并在代码里用 ModList 做能力检测。
+[[dependencies.trial_by_hammer]]
+modId = "create"
+type = "required"
+versionRange = "[6.0.0,)"
+ordering = "NONE"
+side = "BOTH"

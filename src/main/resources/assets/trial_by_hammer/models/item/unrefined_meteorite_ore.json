@@ -1,6 +1,0 @@
-{
-  "parent": "minecraft:item/generated",
-  "textures": {
-    "layer0": "trial_by_hammer:item/unrefined_meteorite_ore"
-  }
-}

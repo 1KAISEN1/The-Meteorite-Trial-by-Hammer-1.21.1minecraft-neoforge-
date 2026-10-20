@@ -1,25 +1,58 @@
+# Trial by Hammer
 
-Installation information
-=======
+Minecraft 1.21.1 / NeoForge 的锻造主题内容模组。以陨铁、合金与锻造为核心，
+目标是成为完整的 Create 附属。
 
-This template repository can be directly cloned to get you started with a new
-mod. Simply create a new repository cloned from this one, by following the
-instructions provided by [GitHub](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template).
+> 当前处于早期开发阶段：工程骨架已就绪，游戏内还没有任何内容。
 
-Once you have your clone, simply open the repository in the IDE of your choice. The usual recommendation for an IDE is either IntelliJ IDEA or Eclipse.
+## 环境要求
 
-If at any point you are missing libraries in your IDE, or you've run into problems you can
-run `gradlew --refresh-dependencies` to refresh the local cache. `gradlew clean` to reset everything 
-{this does not affect your code} and then start the process again.
+| 组件 | 版本 |
+| --- | --- |
+| JDK | 21（`gradle.properties` 里已锁定路径） |
+| Gradle | 8.12（由 wrapper 提供，无需手动安装） |
+| NeoForge | 21.1.252 |
+| Create | 6.0.10 |
 
-Mapping Names:
-============
-By default, the MDK is configured to use the official mapping names from Mojang for methods and fields 
-in the Minecraft codebase. These names are covered by a specific license. All modders should be aware of this
-license. For the latest license text, refer to the mapping file itself, or the reference copy here:
-https://github.com/NeoForged/NeoForm/blob/main/Mojang.md
+## 构建
 
-Additional Resources: 
-==========
-Community Documentation: https://docs.neoforged.net/  
-NeoForged Discord: https://discord.neoforged.net/
+```powershell
+.\gradlew.bat build
+```
+
+产物位于 `build/libs/trial_by_hammer-<版本>.jar`。
+
+首次构建会下载 Gradle 发行版并运行 NeoForm 反编译，耗时约 2 分钟；
+之后的增量构建在数秒级。
+
+## 开发运行
+
+```powershell
+.\gradlew.bat runClient
+```
+
+注意：`src/main/resources/META-INF/neoforge.mods.toml` 目前把 Create 声明为
+必需依赖，而开发客户端不会自动加载 Create。启动前需要把
+`libs/create-1.21.1-6.0.10.jar` 放进 `run/mods/`，否则 FML 会拒绝启动。
+
+## 目录结构
+
+```
+src/main/java/com/trialbyhammer/    Java 源码
+src/main/resources/                 资源与元数据
+libs/                               Create 及拆出的内嵌依赖（编译用）
+docs/                               设计文档
+```
+
+## 依赖说明
+
+Create 6.0.10 把 Flywheel / Ponder / Registrate 以 jar-in-jar 形式内嵌。
+这里把它们拆出来放在 `libs/` 并声明为 `compileOnly`，好处是：
+
+- 不需要给构建脚本添加 Create 的 Maven 仓库；
+- 不涉及 Registrate 的版本配对；
+- 升级 Create 时只需替换 `libs/` 里的文件。
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。

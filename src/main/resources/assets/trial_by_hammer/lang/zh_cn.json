@@ -1,8 +1,0 @@
-{
-    "fml.menu.mods.info.description.trial_by_hammer":  "一个添加了更多锻造细节的模组",
-    "block.trial_by_hammer.meteorite_ore":  "陨铁矿石",
-    "block.trial_by_hammer.meteorite_sand":  "陨石沙",
-    "item.trial_by_hammer.meteorite_ingot":  "陨铁锭",
-    "item.trial_by_hammer.unrefined_meteorite_ore":  "未提纯的陨铁矿石",
-    "item.trial_by_hammer.artisan_hammer":  "工匠锤"
-}
