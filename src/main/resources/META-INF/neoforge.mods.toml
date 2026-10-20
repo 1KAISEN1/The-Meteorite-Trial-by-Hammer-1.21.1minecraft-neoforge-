@@ -27,12 +27,13 @@ versionRange = "[1.21.1,1.22)"
 ordering = "NONE"
 side = "BOTH"
 
-# Create 目前先声明为 required，因为后续所有工艺都要接它的动力学与 Ponder。
-# NOTE: 如果之后要提供"无 Create 也能玩"的独立模式，把这里改成 optional，
-#       并在代码里用 ModList 做能力检测。
+# Create 最终会是 required（本模组定位是完整附属）。
+# 但当前处在探针阶段，开发客户端默认不加载 Create，
+# 所以先降为 optional；正式接入 Create API 时改回 required，
+# 并把 create jar 放进 run/mods/。
 [[dependencies.trial_by_hammer]]
 modId = "create"
-type = "required"
+type = "optional"
 versionRange = "[6.0.0,)"
 ordering = "NONE"
 side = "BOTH"
