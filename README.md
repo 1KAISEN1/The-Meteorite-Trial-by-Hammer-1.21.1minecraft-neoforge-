@@ -56,3 +56,7 @@ Create 6.0.10 把 Flywheel / Ponder / Registrate 以 jar-in-jar 形式内嵌。
 ## 许可证
 
 MIT，见 [LICENSE](LICENSE)。
+
+## 又及
+
+大量使用vibe coding，特别感谢大肥鱼（DeepSeek大模型）    
