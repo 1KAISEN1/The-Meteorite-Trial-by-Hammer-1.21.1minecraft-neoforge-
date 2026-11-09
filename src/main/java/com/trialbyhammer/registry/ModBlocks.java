@@ -29,7 +29,8 @@ public final class ModBlocks {
             "forge_probe",
             () -> new ForgeProbeBlock(BlockBehaviour.Properties.of()
                     .strength(3.5F)
-                    .requiresCorrectToolForDrops()));
+                    // 原型阶段不要求工具：手也能挖，省得测试时还要先找镐
+                    .noOcclusion()));
 
     private ModBlocks() {
     }

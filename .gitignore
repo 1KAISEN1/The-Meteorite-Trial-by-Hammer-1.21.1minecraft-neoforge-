@@ -20,3 +20,14 @@ runs/
 
 # 第三方二进制依赖：不进版本控制，用 tools/fetch-deps.ps1 重建
 libs/*.jar
+
+# 临时文件
+_*.txt
+
+# 不属于本仓库的内容
+coldfront/
+tools/ms/
+tools/*.msi
+
+# 安装包
+*.msi

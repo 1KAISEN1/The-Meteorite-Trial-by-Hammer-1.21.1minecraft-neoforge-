@@ -54,10 +54,6 @@ public class ForgeProbeBlock extends BaseEntityBlock {
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos,
                                                Player player, BlockHitResult hitResult) {
-        // 只在服务端改数据，客户端等同步包。避免两端各算一次导致不一致。
-        if (level.isClientSide) {
-            return InteractionResult.SUCCESS;
-        }
         if (!(level.getBlockEntity(pos) instanceof ForgeProbeBlockEntity probe)) {
             return InteractionResult.PASS;
         }
@@ -67,11 +63,17 @@ public class ForgeProbeBlock extends BaseEntityBlock {
             return InteractionResult.CONSUME;
         }
 
-        // 把世界坐标换算成方块局部坐标，再交给方块实体。
+        // 把世界坐标换算成方块局部坐标。
+        // 坐标约定：X = 刀身长度，Y = 刀身宽度（竖直），Z = 厚度。
+        // 锤击方向取玩家视线：玩家从哪个方向看，就从哪个方向砸。
         Vec3 hit = hitResult.getLocation();
-        probe.strike(
+        Vec3 look = player.getLookAngle();
+        probe.hammer(
                 (float) (hit.x - pos.getX()),
-                (float) (hit.z - pos.getZ()));
+                (float) (hit.y - pos.getY()),
+                (float) look.x,
+                (float) look.y,
+                (float) look.z);
         return InteractionResult.CONSUME;
     }
 

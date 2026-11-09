@@ -69,3 +69,18 @@ tasks.jar {
         )
     }
 }
+
+/**
+ * 离线自测：直接跑 MPM 模拟，不启动游戏、不渲染。
+ *
+ * 用来验证数值稳定性（NaN、越界、速度失控、质量守恒），
+ * 比反复开游戏快得多。
+ *
+ * 用法：.\gradlew.bat mpmSelfTest
+ */
+tasks.register<JavaExec>("mpmSelfTest") {
+    group = "verification"
+    description = "Run the MPM solver headlessly and report numerical stability"
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.trialbyhammer.mpm.MpmSelfTest")
+}

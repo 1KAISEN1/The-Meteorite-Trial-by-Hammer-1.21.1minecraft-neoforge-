@@ -2,6 +2,8 @@ package com.trialbyhammer;
 
 import com.trialbyhammer.registry.ModBlockEntities;
 import com.trialbyhammer.registry.ModBlocks;
+import com.trialbyhammer.registry.ModCreativeTabs;
+import com.trialbyhammer.registry.ModItems;
 
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
@@ -35,9 +37,11 @@ public final class TrialByHammer {
      * @param modContainer 当前模组容器，用于读取元数据或注册配置
      */
     public TrialByHammer(IEventBus modEventBus, ModContainer modContainer) {
-        // 注册顺序没有硬性要求，但保持"方块 → 方块实体"的阅读顺序。
+        // 注册顺序没有硬性要求，但保持"方块 → 方块实体 → 物品 → 物品栏"的阅读顺序。
         ModBlocks.BLOCKS.register(modEventBus);
         ModBlockEntities.BLOCK_ENTITIES.register(modEventBus);
+        ModItems.ITEMS.register(modEventBus);
+        ModCreativeTabs.TABS.register(modEventBus);
 
         LOGGER.info("Trial by Hammer 开始加载（{}）", modContainer.getModId());
     }
