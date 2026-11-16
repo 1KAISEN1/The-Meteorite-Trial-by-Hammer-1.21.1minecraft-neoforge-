@@ -29,16 +29,26 @@ public final class MpmSelfTest {
         report(blade);
         thicknessProfile(blade);
 
-        // 沿刀身锤一排，落点在 Y = 0.62（靠近刃口，刃口在 0.65）
-        for (int round = 1; round <= 40; round++) {
-            float sx = 0.18F + ((round - 1) % 12) * 0.055F;
-            blade.strike(sx, 0.60F, 0.25F, 0.0F, -0.97F, 0.04F, 3.0F);
-            solver.step(blade, DT, SUBSTEPS);
-        }
+        // 模拟真实节奏：抽长一轮 → 翻面 → 再抽长一轮。
+        // 翻面后，上一轮被压薄的方向变成"宽"，这一轮压的是原来的宽。
+        for (int pass = 0; pass < 2; pass++) {
+            for (int round = 1; round <= 30; round++) {
+                float sx = 0.18F + ((round - 1) % 12) * 0.055F;
+                blade.strike(sx, 0.60F, 0.25F, 0.0F, -0.97F, 0.04F, 3.0F,
+                        MpmBlade.HammerShape.CROSS_PEEN);
+                solver.step(blade, DT, SUBSTEPS);
+            }
 
-        System.out.println("=== 24 锤后 ===");
-        report(blade);
-        thicknessProfile(blade);
+            System.out.println("=== 第 " + (pass + 1) + " 轮抽长后 ===");
+            report(blade);
+            thicknessProfile(blade);
+
+            if (pass == 0) {
+                blade.flip();
+                System.out.println("=== 翻面 ===");
+                report(blade);
+            }
+        }
 
         renderViews(blade, "build/mpm/shaped");
     }
@@ -180,5 +190,21 @@ public final class MpmSelfTest {
                 minX, maxX, minY, maxY, minZ, maxZ);
         System.out.printf("  size: %.3f x %.3f x %.3f  speed %.4f  oob %d  nan %d  mass %.4e%n",
                 maxX - minX, maxY - minY, maxZ - minZ, maxSpeed, outOfBounds, nanCount, totalMass);
+
+        // 悬空段诊断：X 超过铁砧范围的部分，平均 Z 应该明显低于铁砧面
+        double hangZ = 0.0;
+        int hangCount = 0;
+        for (int i = 0; i < MpmBlade.COUNT; i++) {
+            if (blade.x(i) > MpmSolver.ANVIL_X1) {
+                hangZ += blade.z(i);
+                hangCount++;
+            }
+        }
+        if (hangCount > 0) {
+            System.out.printf("  悬空段 X>%.2f: %d 个粒子, 平均 Z=%.3f（铁砧面 %.2f）%n",
+                    MpmSolver.ANVIL_X1, hangCount, hangZ / hangCount, MpmSolver.FLOOR_Z);
+        } else {
+            System.out.println("  悬空段: 没有粒子越过砧边");
+        }
     }
 }

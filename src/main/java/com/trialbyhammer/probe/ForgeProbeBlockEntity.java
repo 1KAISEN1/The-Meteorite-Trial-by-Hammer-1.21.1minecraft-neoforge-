@@ -53,7 +53,9 @@ public class ForgeProbeBlockEntity extends BlockEntity {
      */
     public void hammer(float sx, float sy, float dirX, float dirY, float dirZ) {
         // 0.006 是"一锤给多少速度"的经验值，等实测手感再调
-        blade.strike(sx, sy, dirX, dirY, dirZ, 0.18F, force * 0.006F);
+        // 原型阶段统一用圆头锤；等锤子物品做出来再按玩家手里的锤子切换形状
+        blade.strike(sx, sy, dirX, dirY, dirZ, 0.18F, force * 0.006F,
+                MpmBlade.HammerShape.ROUND);
         solver.step(blade, DT, SUBSTEPS);
         setChanged();
     }

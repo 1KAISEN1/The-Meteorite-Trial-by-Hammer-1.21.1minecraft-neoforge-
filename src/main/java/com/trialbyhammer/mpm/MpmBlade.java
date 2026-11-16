@@ -120,22 +120,44 @@ public final class MpmBlade {
     }
 
     /**
+     * 锤击形状：圆头、平头、横锤。
+     *
+     * <p>真实锻造里锤头形状决定材料往哪流：
+     * 圆头锤是一个点，平锤是一个面，横锤是一条线（窄面）。
+     * 横锤的窄面制造局部高压，金属沿垂直于线的方向流开，是"抽长"的主力。</p>
+     */
+    public enum HammerShape {
+        /** 圆头：近似圆形的作用区。 */
+        ROUND(1.0F, 1.0F),
+        /** 平头：正方形作用区，压得均匀。 */
+        FLAT(1.0F, 1.0F),
+        /** 横锤：沿 X 的一条窄线，强制材料沿 Y 流动。 */
+        CROSS_PEEN(2.2F, 0.35F);
+
+        final float scaleX;
+        final float scaleY;
+
+        HammerShape(float scaleX, float scaleY) {
+            this.scaleX = scaleX;
+            this.scaleY = scaleY;
+        }
+    }
+
+    /**
      * 在局部坐标 (sx, sy) 附近锤一下，方向由调用方给出。
      *
-     * <p>真实锻造的锤击方向是三维的：可以垂直下锤、斜着削、横着挤。
-     * 方向向量不需要归一化，这里会自行归一。</p>
-     *
-     * @param sx     落点 X（0..1）
-     * @param sy     落点 Y（0..1）
-     * @param dirX   锤击方向 X
-     * @param dirY   锤击方向 Y
-     * @param dirZ   锤击方向 Z
-     * @param radius 影响半径（0..1）
-     * @param force  力度，直接作为速度增量（已按距离衰减）
+     * @param sx      落点 X（0..1）
+     * @param sy      落点 Y（0..1）
+     * @param dirX    锤击方向 X
+     * @param dirY    锤击方向 Y
+     * @param dirZ    锤击方向 Z
+     * @param radius  基准影响半径（0..1）
+     * @param force   力度，直接作为速度增量（已按距离衰减）
+     * @param shape   锤头形状
      */
     public void strike(float sx, float sy,
                        float dirX, float dirY, float dirZ,
-                       float radius, float force) {
+                       float radius, float force, HammerShape shape) {
         // 方向归一化；零向量则默认向下，避免除零
         float len = (float) Math.sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
         if (len < 1.0E-6F) {
@@ -148,16 +170,23 @@ public final class MpmBlade {
             dirZ /= len;
         }
 
-        float r2 = radius * radius;
+        // 椭圆作用区：横锤在 X 方向拉长、Y 方向压窄
+        float rx = radius * shape.scaleX;
+        float ry = radius * shape.scaleY;
+
         for (int i = 0; i < COUNT; i++) {
             float dx = px[i] - sx;
             float dy = py[i] - sy;
-            float d2 = dx * dx + dy * dy;
-            if (d2 > r2) {
+
+            // 归一化到椭圆坐标系
+            float ex = dx / rx;
+            float ey = dy / ry;
+            float d2 = ex * ex + ey * ey;
+            if (d2 > 1.0F) {
                 continue;
             }
             // 平滑衰减：中心满力，边缘为零
-            float w = 1.0F - d2 / r2;
+            float w = 1.0F - d2;
             w = w * w;
 
             float impulse = force * w;
@@ -165,10 +194,9 @@ public final class MpmBlade {
             vy[i] += dirY * impulse;
             vz[i] += dirZ * impulse;
 
-            // 锤头的楔形效应：锤子压入时，接触点周围的材料被向外挤开。
-            // 没有这一项，粒子只沿锤击方向动，横向形变永远是零——
-            // 而横向形变为零，应力就不会产生横向力，形成死锁。
-            float radial = (float) Math.sqrt(d2);
+            // 锤头的楔形效应：压入时把周围材料向外挤开。
+            // 没有这一项，横向形变永远是零，应力也就不会产生横向力。
+            float radial = (float) Math.sqrt(dx * dx + dy * dy);
             if (radial > 1.0E-6F) {
                 float spread = impulse * 0.15F;
                 vx[i] += (dx / radial) * spread;
@@ -185,6 +213,55 @@ public final class MpmBlade {
         java.util.Arrays.fill(vx, 0.0F);
         java.util.Arrays.fill(vy, 0.0F);
         java.util.Arrays.fill(vz, 0.0F);
+    }
+
+    /**
+     * 翻面：把工件绕长轴（X）旋转 90°。
+     *
+     * <p>现实中抽长会让工件变宽，铁匠会把工件翻过来锤窄，反复交替。
+     * 没有翻面，材料只会越锤越宽，做不出细长的刀身。</p>
+     *
+     * <p>旋转 90° 后，厚度方向变成宽度方向，所以下一次抽长压的是
+     * 原来的"宽"，这样两个方向轮流被压薄，最终形成长条。</p>
+     */
+    public void flip() {
+        // 以包围盒中心为旋转轴，避免工件整体漂移
+        float sumY = 0.0F, sumZ = 0.0F;
+        for (int i = 0; i < COUNT; i++) {
+            sumY += py[i];
+            sumZ += pz[i];
+        }
+        float cy = sumY / COUNT;
+        float cz = sumZ / COUNT;
+
+        for (int i = 0; i < COUNT; i++) {
+            float dy = py[i] - cy;
+            float dz = pz[i] - cz;
+
+            // 绕 X 轴 90°：y' = cz - dz, z' = cy + dy
+            py[i] = cy - dz;
+            pz[i] = cz + dy;
+
+            float vyi = vy[i];
+            float vzi = vz[i];
+            vy[i] = -vzi;
+            vz[i] = vyi;
+
+            // 形变矩阵跟着转：F' = R · F，R 是绕 X 轴 90° 的旋转
+            //   row0' =  row0
+            //   row1' = -row2
+            //   row2' =  row1
+            float f10 = deform[i * 9 + 3], f11 = deform[i * 9 + 4], f12 = deform[i * 9 + 5];
+            float f20 = deform[i * 9 + 6], f21 = deform[i * 9 + 7], f22 = deform[i * 9 + 8];
+
+            deform[i * 9 + 3] = -f20;
+            deform[i * 9 + 4] = -f21;
+            deform[i * 9 + 5] = -f22;
+
+            deform[i * 9 + 6] = f10;
+            deform[i * 9 + 7] = f11;
+            deform[i * 9 + 8] = f12;
+        }
     }
 
     public float x(int i) { return px[i]; }
@@ -237,8 +314,17 @@ public final class MpmBlade {
         return tag;
     }
 
+    /**
+     * 存档量化范围。
+     *
+     * <p>锻造会把材料拉出方块边界（抽长时能到 -0.2 或 1.4），
+     * 所以不能假设 [0,1]。[−0.5, 1.5] 留足了余量。</p>
+     */
+    private static final float SAVE_MIN = -0.5F;
+    private static final float SAVE_RANGE = 2.0F;
+
     private byte[] packPositions() {
-        // 每个坐标量化到 16 位（0..65535 对应 0..1），每粒子 6 字节
+        // 每个坐标量化到 16 位，覆盖 [SAVE_MIN, SAVE_MIN+SAVE_RANGE]
         byte[] out = new byte[COUNT * 6];
         for (int i = 0; i < COUNT; i++) {
             putShort(out, i * 6, px[i]);
@@ -249,8 +335,15 @@ public final class MpmBlade {
     }
 
     private static void putShort(byte[] out, int offset, float v) {
-        int q = Math.max(0, Math.min(65535, Math.round(v * 65535.0F)));
+        float t = (v - SAVE_MIN) / SAVE_RANGE;
+        int q = Math.max(0, Math.min(65535, Math.round(t * 65535.0F)));
         out[offset] = (byte) (q >> 8);
         out[offset + 1] = (byte) q;
+    }
+
+    /** 反量化，和 {@link #putShort} 配套。 */
+    public static float unpackShort(byte[] in, int offset) {
+        int q = ((in[offset] & 0xFF) << 8) | (in[offset + 1] & 0xFF);
+        return SAVE_MIN + (q / 65535.0F) * SAVE_RANGE;
     }
 }

@@ -78,8 +78,26 @@ public final class MpmSolver implements SoftBodySolver {
      */
     private static final float CLAMP_X = 0.12F;
 
-    /** 铁砧底面。 */
+    /** 铁砧表面高度。 */
     public static final float FLOOR_Z = 0.30F;
+
+    /**
+     * 铁砧的覆盖范围（水平方向）。
+     *
+     * <p>铁砧不是无限大的平面。材料伸出边缘后会悬空、下垂，锤击悬空段
+     * 才能真正"抽长"——这是锻造的核心动作。</p>
+     *
+     * <p>X 上限故意不覆盖整个方块：右边那段是"砧外"，材料会伸出去。</p>
+     */
+    public static final float ANVIL_X0 = 0.10F;
+    public static final float ANVIL_X1 = 0.45F;
+    public static final float ANVIL_Y0 = 0.30F;
+    public static final float ANVIL_Y1 = 0.70F;
+
+    /** 判断某点是否在铁砧上方（有支撑）。 */
+    public static boolean onAnvil(float x, float y) {
+        return x >= ANVIL_X0 && x <= ANVIL_X1 && y >= ANVIL_Y0 && y <= ANVIL_Y1;
+    }
 
     /** 初始体积相对质量的系数。绝对值不重要，整体一致即可。 */
     private static final float VOLUME_PER_MASS = 1.0F;
@@ -367,11 +385,11 @@ public final class MpmSolver implements SoftBodySolver {
             blade.setVelocity(i, nvx, nvy, nvz);
 
             // 不限制水平方向：材料被锤扁时会向四周延展，撞到"空气墙"很假。
-            // 只有铁砧（Z 下限）是实体边界。
+            // 铁砧只在它自己的范围里提供支撑；伸出去的部分会悬空下垂。
             float nx = x + nvx * dt;
             float ny = y + nvy * dt;
             float nz = z + nvz * dt;
-            if (nz < FLOOR_Z) {
+            if (onAnvil(nx, ny) && nz < FLOOR_Z) {
                 nz = FLOOR_Z;
                 nvz = 0.0F;
                 blade.setVelocity(i, nvx, nvy, nvz);
