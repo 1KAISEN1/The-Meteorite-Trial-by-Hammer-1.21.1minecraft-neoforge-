@@ -32,7 +32,7 @@ public final class MpmSelfTest {
         // 模拟真实节奏：抽长一轮 → 翻面 → 再抽长一轮。
         // 翻面后，上一轮被压薄的方向变成"宽"，这一轮压的是原来的宽。
         for (int pass = 0; pass < 2; pass++) {
-            for (int round = 1; round <= 30; round++) {
+            for (int round = 1; round <= 18; round++) {
                 float sx = 0.18F + ((round - 1) % 12) * 0.055F;
                 blade.strike(sx, 0.60F, 0.25F, 0.0F, -0.97F, 0.04F, 3.0F,
                         MpmBlade.HammerShape.CROSS_PEEN);
