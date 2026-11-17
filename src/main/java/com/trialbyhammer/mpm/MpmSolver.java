@@ -22,9 +22,9 @@ public final class MpmSolver implements SoftBodySolver {
         return "mpm";
     }
 
-    public static final int NX = 32;
-    public static final int NY = 16;
-    public static final int NZ = 6;
+    public static final int NX = 128;
+    public static final int NY = 64;
+    public static final int NZ = 24;
 
     /**
      * 网格覆盖的世界范围。比 [0,1] 大得多，让材料向四周延展时够不着边界。
@@ -32,8 +32,8 @@ public final class MpmSolver implements SoftBodySolver {
      * <p>网格是 MPM 的计算中介，粒子之间的作用全靠它。数组是有限的，
      * 所以"边界"本质上无法消除，只能推远。</p>
      */
-    public static final float GRID_MIN = -0.5F;
-    public static final float GRID_SIZE = 2.0F;
+    public static final float GRID_MIN = -2.0F;
+    public static final float GRID_SIZE = 4.0F;
 
     private static final int CELLS = NX * NY * NZ;
 
@@ -90,7 +90,7 @@ public final class MpmSolver implements SoftBodySolver {
      * <p>X 上限故意不覆盖整个方块：右边那段是"砧外"，材料会伸出去。</p>
      */
     public static final float ANVIL_X0 = 0.10F;
-    public static final float ANVIL_X1 = 0.45F;
+    public static final float ANVIL_X1 = 0.75F;
     public static final float ANVIL_Y0 = 0.30F;
     public static final float ANVIL_Y1 = 0.70F;
 
@@ -115,7 +115,42 @@ public final class MpmSolver implements SoftBodySolver {
     private static final float PROJECTION = 0.35F;
 
     private final Mat3 f = new Mat3();
+    private final Mat3 fp = new Mat3();
+    private final Mat3 fe = new Mat3();
     private final Mat3 sigma = new Mat3();
+
+    /**
+     * 返回映射：应力超过屈服面时，把弹性形变的偏差缩回屈服面，
+     * 缩掉的那部分转成塑性形变永久保留。
+     *
+     * <p>没有这一步，金属就是纯弹性——锤完弹回去，永远定不了型。</p>
+     */
+    private void returnMapping(MpmBlade blade, int i, Mat3 feMat, float yield) {
+        Mat3 r = new Mat3();
+        MpmMath.polarDecompose(feMat, r);
+
+        Mat3 dev = new Mat3();
+        dev.set(feMat).sub(r);
+
+        float mag = dev.frobenius();
+        if (mag < 1.0E-9F) {
+            return;
+        }
+
+        // 偏差对应的应力是 2μ·dev，缩放到刚好等于屈服强度
+        float scale = yield / (2.0F * MU * mag);
+        if (scale >= 1.0F) {
+            return;
+        }
+
+        dev.scale(scale);
+        fe.set(r).add(dev);
+
+        // Fp = Fe⁻¹ · F
+        Mat3 fpNew = new Mat3();
+        fpNew.set(fe).invert().mul(f);
+        storePlasticDeform(blade, i, fpNew);
+    }
 
     /**
      * 推进一次锤击。
@@ -126,6 +161,7 @@ public final class MpmSolver implements SoftBodySolver {
             particleToGrid(blade);
             gridUpdate(dt);
             gridToParticle(blade, dt);
+            clampDeform(blade);
             projectVolume(blade);
         }
     }
@@ -165,13 +201,13 @@ public final class MpmSolver implements SoftBodySolver {
         float ratio = vol / restVolume;
 
         // 双向：膨胀了收缩，压缩了扩张。只单向的话，材料会被锤得越来越紧。
-        if (Math.abs(ratio - 1.0F) < 0.08F) {
+        if (Math.abs(ratio - 1.0F) < 0.25F) {
             return;
         }
 
         // 每次只纠正一半，避免来回振荡
         float correction = (float) Math.pow(1.0F / ratio, 1.0 / 3.0);
-        float scale = 1.0F + (correction - 1.0F) * 0.5F;
+        float scale = 1.0F + (correction - 1.0F) * 0.25F;
         float cx = (float) (sumX / MpmBlade.COUNT);
         float cy = (float) (sumY / MpmBlade.COUNT);
         float cz = (float) (sumZ / MpmBlade.COUNT);
@@ -224,13 +260,23 @@ public final class MpmSolver implements SoftBodySolver {
             float x = blade.x(i), y = blade.y(i), z = blade.z(i);
             float m = blade.mass(i);
 
+            // 弹性形变 Fe = F · Fp⁻¹。应力只由弹性部分产生，
+            // 塑性部分永久保留、不回弹——这是"锤完定型"的关键。
             loadDeform(blade, i, f);
-            MpmMath.stress(f, sigma, MU, LAMBDA);
+            loadPlasticDeform(blade, i, fp);
+            fp.set(fp).invert();          // fp 现在是 Fp⁻¹
+            fe.set(f).mul(fp);            // Fe = F · Fp⁻¹
+
+            MpmMath.stress(fe, sigma, MU, LAMBDA);
 
             // 冷作硬化
             float yield = YIELD_BASE * (1.0F + HARDENING * blade.plasticStrain(i));
             if (MpmMath.clampToYield(sigma, yield)) {
                 blade.addPlasticStrain(i, 0.002F);
+
+                // 返回映射：把 Fe 的偏差按比例缩回屈服面，
+                // 缩掉的那部分转成塑性形变，永久留下。
+                returnMapping(blade, i, fe, yield);
             }
 
             float v0 = m * VOLUME_PER_MASS;
@@ -437,6 +483,45 @@ public final class MpmSolver implements SoftBodySolver {
     }
 
     /**
+     * 形变矩阵钳制：防止 F 在多次锤击后数值爆炸。
+     *
+     * <p>社区里这类"材料到某个临界点突然崩"的问题，根因通常是 F 或速度发散。
+     * 这里做三件事：</p>
+     * <ul>
+     *   <li>det(F) 偏离 1 太多时拉回来（不可压缩）</li>
+     *   <li>F 的范数封顶，避免应力计算溢出</li>
+     *   <li>保证 F 的九个分量都是有限值</li>
+     * </ul>
+     *
+     * <p>只在"快出事"时介入，平时不碰——否则会像之前那样把体积应力抹掉。</p>
+     */
+    private void clampDeform(MpmBlade blade) {
+        for (int i = 0; i < MpmBlade.COUNT; i++) {
+            loadDeform(blade, i, f);
+
+            if (!f.isFinite()) {
+                blade.setDeform(i, 0, 1.0F); blade.setDeform(i, 1, 0.0F); blade.setDeform(i, 2, 0.0F);
+                blade.setDeform(i, 3, 0.0F); blade.setDeform(i, 4, 1.0F); blade.setDeform(i, 5, 0.0F);
+                blade.setDeform(i, 6, 0.0F); blade.setDeform(i, 7, 0.0F); blade.setDeform(i, 8, 1.0F);
+                continue;
+            }
+
+            float det = f.det();
+            if (det < 0.3F || det > 3.0F) {
+                float s = (float) Math.pow(1.0F / Math.max(det, 1.0E-6F), 1.0 / 3.0);
+                f.scale(s);
+            }
+
+            float norm = f.frobenius();
+            if (norm > 4.0F) {
+                f.scale(4.0F / norm);
+            }
+
+            storeDeform(blade, i, f);
+        }
+    }
+
+    /**
      * 不可压缩：每个子步结束后把 F 的行列式拉回 1。
      * 金属被锤只改变形状，不改变体积。
      */
@@ -480,6 +565,30 @@ public final class MpmSolver implements SoftBodySolver {
         blade.setDeform(i, 6, m.m20);
         blade.setDeform(i, 7, m.m21);
         blade.setDeform(i, 8, m.m22);
+    }
+
+    private static void loadPlasticDeform(MpmBlade blade, int i, Mat3 out) {
+        out.m00 = blade.plasticDeform(i, 0);
+        out.m01 = blade.plasticDeform(i, 1);
+        out.m02 = blade.plasticDeform(i, 2);
+        out.m10 = blade.plasticDeform(i, 3);
+        out.m11 = blade.plasticDeform(i, 4);
+        out.m12 = blade.plasticDeform(i, 5);
+        out.m20 = blade.plasticDeform(i, 6);
+        out.m21 = blade.plasticDeform(i, 7);
+        out.m22 = blade.plasticDeform(i, 8);
+    }
+
+    private static void storePlasticDeform(MpmBlade blade, int i, Mat3 m) {
+        blade.setPlasticDeform(i, 0, m.m00);
+        blade.setPlasticDeform(i, 1, m.m01);
+        blade.setPlasticDeform(i, 2, m.m02);
+        blade.setPlasticDeform(i, 3, m.m10);
+        blade.setPlasticDeform(i, 4, m.m11);
+        blade.setPlasticDeform(i, 5, m.m12);
+        blade.setPlasticDeform(i, 6, m.m20);
+        blade.setPlasticDeform(i, 7, m.m21);
+        blade.setPlasticDeform(i, 8, m.m22);
     }
 
     // ---- B 样条 ----

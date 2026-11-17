@@ -14,8 +14,8 @@ import net.minecraft.nbt.CompoundTag;
  */
 public final class MpmBlade {
 
-    /** 粒子数。先按 1 万跑，验证稳定性后再逐步下调。 */
-    public static final int COUNT = 10_000;
+    /** 粒子数。alpha 阶段先堆料，验证可行性优先于性能。 */
+    public static final int COUNT = 20_000;
 
     /**
      * 剑坯在方块内的占位。
@@ -46,6 +46,15 @@ public final class MpmBlade {
      */
     private final float[] deform = new float[COUNT * 9];
 
+    /**
+     * 塑性形变 Fp，同样是 3×3 矩阵，按行展开。
+     *
+     * <p>总形变 F 拆成 F = Fe · Fp：
+     * Fe 是弹性部分（会回弹），Fp 是塑性部分（永久保留）。
+     * 没有这个拆分，金属就会像弹簧一样锤完弹回去。</p>
+     */
+    private final float[] plasticDeform = new float[COUNT * 9];
+
     /** 材料 ID，0 = 空（本版本恒非 0）。 */
     private final byte[] material = new byte[COUNT];
 
@@ -69,7 +78,7 @@ public final class MpmBlade {
         // 50 × 25 × 8 = 10,000
         // 厚度方向给到 8 层：只有 2 层的话，粒子云是一张纸，
         // 压不出体积感，也建立不了厚度方向的应力梯度。
-        final int nx = 50, ny = 25, nz = 8;
+        final int nx = 100, ny = 25, nz = 8;
         final float perParticle = 2.7E8F / COUNT; // 约 27,000 nB
 
         // 一格的实际尺寸，抖动幅度取它的六成
@@ -100,6 +109,10 @@ public final class MpmBlade {
                     deform[i * 9] = 1.0F;
                     deform[i * 9 + 4] = 1.0F;
                     deform[i * 9 + 8] = 1.0F;
+
+                    plasticDeform[i * 9] = 1.0F;
+                    plasticDeform[i * 9 + 4] = 1.0F;
+                    plasticDeform[i * 9 + 8] = 1.0F;
 
                     i++;
                 }
@@ -141,6 +154,91 @@ public final class MpmBlade {
             this.scaleX = scaleX;
             this.scaleY = scaleY;
         }
+    }
+
+    /**
+     * 锤面压入：模拟真实锤子"占空间"而不是"给速度"。
+     *
+     * <p>之前是给作用区内的粒子加一个速度脉冲，结果脉冲被 MPM 的网格平均、
+     * 被应力抵抗、被阻尼吃掉，材料只是轻轻抖一下。</p>
+     *
+     * <p>真实锤子是一个位移边界：锤面压进去，材料必须让开。
+     * 这里改成：</p>
+     * <ol>
+     *   <li>先找到作用区当前的最高点，确定锤面高度</li>
+     *   <li>锤面以上的粒子被直接压到锤面（位移约束）</li>
+     *   <li>被压开的体积给一个向外的速度，让它流向四周（体积守恒）</li>
+     * </ol>
+     *
+     * @param sx       落点 X
+     * @param sy       落点 Y
+     * @param depth    压入深度（占 Z 的比例）
+     * @param radius   基准影响半径
+     * @param shape    锤头形状
+     * @return 实际压下去的体积（相对量），可用于相机震动、音效等
+     */
+    public float press(float sx, float sy, float depth, float radius, HammerShape shape) {
+        float rx = radius * shape.scaleX;
+        float ry = radius * shape.scaleY;
+
+        // 1. 找作用区最高点
+        float maxZ = -Float.MAX_VALUE;
+        for (int i = 0; i < COUNT; i++) {
+            float dx = (px[i] - sx) / rx;
+            float dy = (py[i] - sy) / ry;
+            if (dx * dx + dy * dy > 1.0F) {
+                continue;
+            }
+            if (pz[i] > maxZ) {
+                maxZ = pz[i];
+            }
+        }
+        if (maxZ < -1.0E6F) {
+            return 0.0F;
+        }
+
+        // 2. 锤面高度
+        float surface = maxZ - depth;
+        float pushed = 0.0F;
+
+        for (int i = 0; i < COUNT; i++) {
+            float dx = (px[i] - sx) / rx;
+            float dy = (py[i] - sy) / ry;
+            float d2 = dx * dx + dy * dy;
+            if (d2 > 1.0F) {
+                continue;
+            }
+            if (pz[i] <= surface) {
+                continue;
+            }
+
+            // 3. 位移约束：压到锤面
+            float over = pz[i] - surface;
+            pz[i] = surface;
+            pushed += over;
+
+            // 4. 体积重分配：压掉的高度直接变成水平位移。
+            // 不等应力传播——锤击是确定的几何操作，压多少就往外推多少。
+            float ox = px[i] - sx;
+            float oy = py[i] - sy;
+            float r = (float) Math.sqrt(ox * ox + oy * oy);
+            float push = over * 0.2F;
+
+            if (r > 1.0E-6F) {
+                px[i] += (ox / r) * push;
+                py[i] += (oy / r) * push;
+            } else {
+                // 正中锤心：用索引哈希给个确定方向，避免除零（不用随机）
+                float a = hash01(i, 7) * 6.2831853F;
+                px[i] += (float) Math.cos(a) * push;
+                py[i] += (float) Math.sin(a) * push;
+            }
+
+            // 5. 被压过的粒子会冷作硬化
+            plasticStrain[i] = Math.min(10.0F, plasticStrain[i] + over * 2.0F);
+        }
+
+        return pushed;
     }
 
     /**
@@ -198,7 +296,7 @@ public final class MpmBlade {
             // 没有这一项，横向形变永远是零，应力也就不会产生横向力。
             float radial = (float) Math.sqrt(dx * dx + dy * dy);
             if (radial > 1.0E-6F) {
-                float spread = impulse * 0.15F;
+                float spread = impulse * 0.0F;  // 诊断：关掉楔形横向分量
                 vx[i] += (dx / radial) * spread;
                 vy[i] += (dy / radial) * spread;
             }
@@ -261,6 +359,18 @@ public final class MpmBlade {
             deform[i * 9 + 6] = f10;
             deform[i * 9 + 7] = f11;
             deform[i * 9 + 8] = f12;
+
+            // 塑性形变也要跟着转，否则翻面后"永久变形"的方向就错了
+            float p10 = plasticDeform[i * 9 + 3], p11 = plasticDeform[i * 9 + 4], p12 = plasticDeform[i * 9 + 5];
+            float p20 = plasticDeform[i * 9 + 6], p21 = plasticDeform[i * 9 + 7], p22 = plasticDeform[i * 9 + 8];
+
+            plasticDeform[i * 9 + 3] = -p20;
+            plasticDeform[i * 9 + 4] = -p21;
+            plasticDeform[i * 9 + 5] = -p22;
+
+            plasticDeform[i * 9 + 6] = p10;
+            plasticDeform[i * 9 + 7] = p11;
+            plasticDeform[i * 9 + 8] = p12;
         }
     }
 
@@ -287,6 +397,11 @@ public final class MpmBlade {
     public float mass(int i) { return mass[i]; }
 
     public float plasticStrain(int i) { return plasticStrain[i]; }
+
+    /** 塑性形变 Fp 的分量（行主序 0..8）。 */
+    public float plasticDeform(int i, int k) { return plasticDeform[i * 9 + k]; }
+
+    public void setPlasticDeform(int i, int k, float value) { plasticDeform[i * 9 + k] = value; }
 
     /** 累积塑性应变，用于冷作硬化。 */
     public void addPlasticStrain(int i, float delta) {

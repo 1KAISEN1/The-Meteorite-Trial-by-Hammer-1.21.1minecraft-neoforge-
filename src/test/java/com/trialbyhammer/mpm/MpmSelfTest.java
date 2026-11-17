@@ -30,13 +30,25 @@ public final class MpmSelfTest {
         thicknessProfile(blade);
 
         // 模拟真实节奏：抽长一轮 → 翻面 → 再抽长一轮。
-        // 翻面后，上一轮被压薄的方向变成"宽"，这一轮压的是原来的宽。
+        // 每锤拍一帧，能看到材料是"怎么"流动的，而不是只看起点终点。
+        new File("build/mpm/frames").mkdirs();
+        int frame = 0;
+        renderFrame(blade, "build/mpm/frames/f" + String.format("%03d", frame) + ".png");
+        frame++;
+
         for (int pass = 0; pass < 2; pass++) {
             for (int round = 1; round <= 18; round++) {
                 float sx = 0.18F + ((round - 1) % 12) * 0.055F;
-                blade.strike(sx, 0.60F, 0.25F, 0.0F, -0.97F, 0.04F, 3.0F,
-                        MpmBlade.HammerShape.CROSS_PEEN);
+                blade.press(sx, 0.60F, 0.02F, 0.04F, MpmBlade.HammerShape.CROSS_PEEN);
                 solver.step(blade, DT, SUBSTEPS);
+
+                // 逐锤打印：突变会表现为某一锤的数据跳变
+                float[] s = bounds(blade);
+                System.out.printf("  p%d h%02d  X %.3f  Y %.3f  Z %.3f  v %.3f%n",
+                        pass + 1, round, s[0], s[1], s[2], s[3]);
+
+                renderFrame(blade, "build/mpm/frames/f" + String.format("%03d", frame) + ".png");
+                frame++;
             }
 
             System.out.println("=== 第 " + (pass + 1) + " 轮抽长后 ===");
@@ -51,6 +63,27 @@ public final class MpmSelfTest {
         }
 
         renderViews(blade, "build/mpm/shaped");
+    }
+
+    /** 单帧：俯视图，用于拼成过程动画。 */
+    private static void renderFrame(MpmBlade blade, String path) throws Exception {
+        int size = 400;
+        BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(new Color(18, 18, 22));
+        g.fillRect(0, 0, size, size);
+
+        for (int i = 0; i < MpmBlade.COUNT; i++) {
+            int px = (int) (blade.x(i) * size);
+            int py = (int) ((1.0F - blade.y(i)) * size);
+            if (px < 0 || px >= size || py < 0 || py >= size) {
+                continue;
+            }
+            g.setColor(new Color(255, 170, 60));
+            g.fillRect(px, py, 2, 2);
+        }
+        g.dispose();
+        ImageIO.write(img, "png", new File(path));
     }
 
     /**
@@ -111,12 +144,20 @@ public final class MpmSelfTest {
         for (int i = 0; i < MpmBlade.COUNT; i++) {
             int px = (int) (blade.x(i) * size);
             int py = (int) ((1.0F - blade.y(i)) * size);
-            int shade = 100 + (int) (150 * Math.min(1.0F, blade.z(i) * 2.0F));
-            g.setColor(new Color(Math.min(255, shade + 80), shade / 2 + 30, 25));
+            if (px < 0 || px >= size || py < 0 || py >= size) {
+                continue;
+            }
+            // 钳制到 0..255：材料掉出画布时 z 可能为负，不钳会抛异常
+            int shade = clamp255(100 + (int) (150 * Math.min(1.0F, Math.max(0.0F, blade.z(i) * 2.0F))));
+            g.setColor(new Color(clamp255(shade + 80), clamp255(shade / 2 + 30), 25));
             g.fillRect(px, py, 2, 2);
         }
         g.dispose();
         ImageIO.write(img, "png", new File(path));
+    }
+
+    private static int clamp255(int v) {
+        return Math.max(0, Math.min(255, v));
     }
 
     private static void sideView(MpmBlade blade, String path) throws Exception {
@@ -147,6 +188,27 @@ public final class MpmSelfTest {
         }
         g.dispose();
         ImageIO.write(img, "png", new File(path));
+    }
+
+    /** 紧凑的包围盒 + 最大速度，用于逐锤诊断。 */
+    private static float[] bounds(MpmBlade blade) {
+        float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+        float minZ = Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
+        float maxSpeed = 0.0F;
+
+        for (int i = 0; i < MpmBlade.COUNT; i++) {
+            float x = blade.x(i), y = blade.y(i), z = blade.z(i);
+            float vx = blade.vx(i), vy = blade.vy(i), vz = blade.vz(i);
+            if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(z)) {
+                continue;
+            }
+            minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+            minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+            maxSpeed = Math.max(maxSpeed, (float) Math.sqrt(vx * vx + vy * vy + vz * vz));
+        }
+        return new float[]{maxX - minX, maxY - minY, maxZ - minZ, maxSpeed};
     }
 
     private static void report(MpmBlade blade) {
