@@ -84,3 +84,15 @@ tasks.register<JavaExec>("mpmSelfTest") {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass.set("com.trialbyhammer.mpm.MpmSelfTest")
 }
+
+/**
+ * 厚度场模型自测：和 MPM 版对比形状。
+ *
+ * 用法：.\gradlew.bat heightFieldSelfTest
+ */
+tasks.register<JavaExec>("heightFieldSelfTest") {
+    group = "verification"
+    description = "Run the height-field forging prototype headlessly"
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.trialbyhammer.mpmp.HeightFieldSelfTest")
+}
