@@ -62,6 +62,8 @@ public final class MpmSelfTest {
             }
         }
 
+        System.out.printf("  塑性事件: %d 生效, %d 跳过（形变不够）%n",
+                solver.plasticEvents, solver.plasticSkipped);
         renderViews(blade, "build/mpm/shaped");
     }
 

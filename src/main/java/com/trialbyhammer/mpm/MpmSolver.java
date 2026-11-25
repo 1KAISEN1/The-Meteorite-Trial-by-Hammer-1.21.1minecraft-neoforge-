@@ -119,6 +119,12 @@ public final class MpmSolver implements SoftBodySolver {
     private final Mat3 fe = new Mat3();
     private final Mat3 sigma = new Mat3();
 
+    /** 诊断用：returnMapping 实际被调用（并生效）的次数。 */
+    public int plasticEvents = 0;
+
+    /** 诊断用：returnMapping 被调用但 scale >= 1（形变不够）而跳过的次数。 */
+    public int plasticSkipped = 0;
+
     /**
      * 返回映射：应力超过屈服面时，把弹性形变的偏差缩回屈服面，
      * 缩掉的那部分转成塑性形变永久保留。
@@ -140,9 +146,11 @@ public final class MpmSolver implements SoftBodySolver {
         // 偏差对应的应力是 2μ·dev，缩放到刚好等于屈服强度
         float scale = yield / (2.0F * MU * mag);
         if (scale >= 1.0F) {
+            plasticSkipped++;
             return;
         }
 
+        plasticEvents++;
         dev.scale(scale);
         fe.set(r).add(dev);
 

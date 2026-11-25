@@ -218,20 +218,23 @@ public final class MpmBlade {
             pushed += over;
 
             // 4. 体积重分配：压掉的高度直接变成水平位移。
-            // 不等应力传播——锤击是确定的几何操作，压多少就往外推多少。
+            //
+            //    关键是各向异性：锻造是"延展"，不是"均匀摊开"。
+            //    材料优先沿 X（刀身方向）流，Y（宽度）方向只给一点点——
+            //    否则宽度会跟着一起涨，刀越锤越宽。
             float ox = px[i] - sx;
             float oy = py[i] - sy;
             float r = (float) Math.sqrt(ox * ox + oy * oy);
-            float push = over * 0.2F;
+            float push = over * 0.8F;
 
             if (r > 1.0E-6F) {
-                px[i] += (ox / r) * push;
-                py[i] += (oy / r) * push;
+                px[i] += (ox / r) * push * 8.0F;   // X 方向流得远
+                py[i] += (oy / r) * push * 0.15F;  // Y 方向几乎不流
             } else {
                 // 正中锤心：用索引哈希给个确定方向，避免除零（不用随机）
                 float a = hash01(i, 7) * 6.2831853F;
-                px[i] += (float) Math.cos(a) * push;
-                py[i] += (float) Math.sin(a) * push;
+                px[i] += (float) Math.cos(a) * push * 3.0F;
+                py[i] += (float) Math.sin(a) * push * 0.15F;
             }
 
             // 5. 被压过的粒子会冷作硬化
