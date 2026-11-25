@@ -24,7 +24,7 @@ public final class MpmSolver implements SoftBodySolver {
 
     public static final int NX = 128;
     public static final int NY = 64;
-    public static final int NZ = 24;
+    public static final int NZ = 128;
 
     /**
      * 网格覆盖的世界范围。比 [0,1] 大得多，让材料向四周延展时够不着边界。
@@ -35,16 +35,11 @@ public final class MpmSolver implements SoftBodySolver {
     public static final float GRID_MIN = -2.0F;
     public static final float GRID_SIZE = 4.0F;
 
-    private static final int CELLS = NX * NY * NZ;
-
-    /** 网格：质量、速度、力。每次子步清空重算。 */
-    private final float[] gMass = new float[CELLS];
-    private final float[] gvx = new float[CELLS];
-    private final float[] gvy = new float[CELLS];
-    private final float[] gvz = new float[CELLS];
-    private final float[] gfx = new float[CELLS];
-    private final float[] gfy = new float[CELLS];
-    private final float[] gfz = new float[CELLS];
+    // Keep the full spatial domain but allocate only occupied Z layers.
+    private int gridZ0;
+    private float[] gMass = new float[0], gvx, gvy, gvz, gfx, gfy, gfz;
+    private int[] active = new int[0];
+    private int activeCount;
 
     // ---- 材料参数（归一化单位，可调） ----
 
@@ -52,7 +47,7 @@ public final class MpmSolver implements SoftBodySolver {
     private static final float MU = 3.0F;
 
     /** 体积模量：越大越不可压缩。 */
-    private static final float LAMBDA = 50.0F;
+    static final float LAMBDA = 50.0F;
 
     /** 基础屈服强度。应力超过它就开始塑性流动。 */
     private static final float YIELD_BASE = 0.12F;
@@ -71,12 +66,12 @@ public final class MpmSolver implements SoftBodySolver {
      *
      * <p>没有重力时，被锤击推出去的材料会一直漂着，边缘会"翘起来"。</p>
      */
-    private static final float GRAVITY = 0.5F;
+    private static final float GRAVITY = 0.12F;
 
     /**
      * 钳子夹持区：X 小于这个值的粒子被固定住，模拟夹在台钳里的那一端。
      */
-    private static final float CLAMP_X = 0.12F;
+    static final float CLAMP_X = 0.12F;
 
     /** 铁砧表面高度。 */
     public static final float FLOOR_Z = 0.30F;
@@ -101,18 +96,6 @@ public final class MpmSolver implements SoftBodySolver {
 
     /** 初始体积相对质量的系数。绝对值不重要，整体一致即可。 */
     private static final float VOLUME_PER_MASS = 1.0F;
-
-    /** 网格单元体积（对应 GRID_SIZE 的范围）。 */
-    private static final float CELL_VOL =
-            (GRID_SIZE / NX) * (GRID_SIZE / NY) * (GRID_SIZE / NZ);
-
-    /**
-     * 初始包围盒体积。第一次推进时记录，用于判断材料是否被锤松。
-     */
-    private float restVolume = 0.0F;
-
-    /** 位置投影的强度。太大则抖动，太小则压不实。 */
-    private static final float PROJECTION = 0.35F;
 
     private final Mat3 f = new Mat3();
     private final Mat3 fp = new Mat3();
@@ -151,6 +134,7 @@ public final class MpmSolver implements SoftBodySolver {
         }
 
         plasticEvents++;
+        blade.addPlasticStrain(i, mag * (1 - scale));
         dev.scale(scale);
         fe.set(r).add(dev);
 
@@ -161,103 +145,52 @@ public final class MpmSolver implements SoftBodySolver {
         // J2 塑性要求塑性流动等容：det(Fp) ≡ 1。
         // 不修正的话 Fp 会一路"压缩"，材料只会被压扁，"抽长"结构上不可能出现。
         float detFp = fpNew.det();
-        if (detFp > 1.0E-6F) {
-            fpNew.scale((float) Math.pow(1.0F / detFp, 1.0 / 3.0));
+        if (detFp > 1.0E-6F && Float.isFinite(detFp)) {
+            fpNew.scale((float)(1 / Math.cbrt(detFp)));
+            blade.writePlasticDeform(i, fpNew);
         }
-
-        storePlasticDeform(blade, i, fpNew);
     }
 
     /**
      * 推进一次锤击。
      */
     public void step(MpmBlade blade, float dt, int substeps) {
-        for (int s = 0; s < substeps; s++) {
-            clearGrid();
+        // Explicit elastic waves must travel less than half a cell in one step.
+        double waveSpeed = Math.sqrt((LAMBDA + 2 * MU) * VOLUME_PER_MASS);
+        double maxDt = 0.5 * GRID_SIZE / (Math.max(NX, Math.max(NY, NZ)) * waveSpeed);
+        int subdivisions = Math.max(1, (int) Math.ceil(dt / maxDt));
+        dt /= subdivisions;
+        for (int s = 0; s < substeps * subdivisions; s++) {
+            prepareGrid(blade);
             particleToGrid(blade);
             gridUpdate(dt);
             gridToParticle(blade, dt);
-            clampDeform(blade);
-            projectVolume(blade);
+            projectDeform(blade);
         }
+        blade.projectVolume();
     }
 
-    /**
-     * 体积保持：材料被锤松时，把它整体向质心收一点。
-     *
-     * <p>用包围盒体积做判断，简单但稳定。密度梯度投影在边界处符号容易出问题，
-     * 会把粒子吹飞，所以不用那套。</p>
-     */
-    private void projectVolume(MpmBlade blade) {
-        float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
-        float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
-        float minZ = Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
-        double sumX = 0.0, sumY = 0.0, sumZ = 0.0;
-
+    private void prepareGrid(MpmBlade blade) {
+        for (int j = 0; j < activeCount; j++) {
+            int i = active[j];
+            gMass[i] = gvx[i] = gvy[i] = gvz[i] = gfx[i] = gfy[i] = gfz[i] = 0;
+        }
+        activeCount = 0;
+        float bottom = Float.POSITIVE_INFINITY, top = Float.NEGATIVE_INFINITY;
         for (int i = 0; i < MpmBlade.COUNT; i++) {
-            float x = blade.x(i), y = blade.y(i), z = blade.z(i);
-            if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(z)) {
-                continue;
-            }
-            minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-            minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-            minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
-            sumX += x;
-            sumY += y;
-            sumZ += z;
+            bottom = Math.min(bottom, blade.z(i));
+            top = Math.max(top, blade.z(i));
         }
-
-        float vol = Math.max(1.0E-6F, (maxX - minX) * (maxY - minY) * (maxZ - minZ));
-
-        if (restVolume <= 0.0F) {
-            restVolume = vol;
-            return;
+        gridZ0 = (int) gridCoordinate(bottom, NZ) - 1;
+        int layers = (int) gridCoordinate(top, NZ) + 2 - gridZ0;
+        int capacity = layers * NX * NY;
+        if (capacity > gMass.length) {
+            int padded = Math.min(NZ, layers + 4) * NX * NY;
+            gMass = new float[padded];
+            gvx = new float[padded]; gvy = new float[padded]; gvz = new float[padded];
+            gfx = new float[padded]; gfy = new float[padded]; gfz = new float[padded];
+            active = new int[padded];
         }
-
-        float ratio = vol / restVolume;
-
-        // 双向：膨胀了收缩，压缩了扩张。只单向的话，材料会被锤得越来越紧。
-        if (Math.abs(ratio - 1.0F) < 0.25F) {
-            return;
-        }
-
-        // 每次只纠正一半，避免来回振荡
-        float correction = (float) Math.pow(1.0F / ratio, 1.0 / 3.0);
-        float scale = 1.0F + (correction - 1.0F) * 0.25F;
-        float cx = (float) (sumX / MpmBlade.COUNT);
-        float cy = (float) (sumY / MpmBlade.COUNT);
-        float cz = (float) (sumZ / MpmBlade.COUNT);
-
-        for (int i = 0; i < MpmBlade.COUNT; i++) {
-            float x = blade.x(i), y = blade.y(i), z = blade.z(i);
-            if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(z)) {
-                continue;
-            }
-            float nx = cx + (x - cx) * scale;
-            float ny = cy + (y - cy) * scale;
-            float nz = cz + (z - cz) * scale;
-            if (nz < FLOOR_Z) {
-                nz = FLOOR_Z;
-            }
-            blade.setPosition(i, nx, ny, nz);
-        }
-    }
-
-    private float densityAt(int x, int y, int z) {
-        int cx = clampCell(x, NX);
-        int cy = clampCell(y, NY);
-        int cz = clampCell(z, NZ);
-        return gMass[index(cx, cy, cz)] / CELL_VOL;
-    }
-
-    private void clearGrid() {
-        java.util.Arrays.fill(gMass, 0.0F);
-        java.util.Arrays.fill(gvx, 0.0F);
-        java.util.Arrays.fill(gvy, 0.0F);
-        java.util.Arrays.fill(gvz, 0.0F);
-        java.util.Arrays.fill(gfx, 0.0F);
-        java.util.Arrays.fill(gfy, 0.0F);
-        java.util.Arrays.fill(gfz, 0.0F);
     }
 
     /**
@@ -278,34 +211,44 @@ public final class MpmSolver implements SoftBodySolver {
 
             // 弹性形变 Fe = F · Fp⁻¹。应力只由弹性部分产生，
             // 塑性部分永久保留、不回弹——这是"锤完定型"的关键。
-            loadDeform(blade, i, f);
-            loadPlasticDeform(blade, i, fp);
-            fp.set(fp).invert();          // fp 现在是 Fp⁻¹
+            blade.readDeform(i, f);
+            blade.readPlasticDeform(i, fp);
+            fp.invert();          // fp 现在是 Fp⁻¹
             fe.set(f).mul(fp);            // Fe = F · Fp⁻¹
 
             MpmMath.stress(fe, sigma, MU, LAMBDA);
 
             // 冷作硬化
             float yield = YIELD_BASE * (1.0F + HARDENING * blade.plasticStrain(i));
-            if (MpmMath.clampToYield(sigma, yield)) {
-                blade.addPlasticStrain(i, 0.002F);
-
-                // 返回映射：把 Fe 的偏差按比例缩回屈服面，
-                // 缩掉的那部分转成塑性形变，永久留下。
+            float mean = (sigma.m00 + sigma.m11 + sigma.m22) / 3;
+            sigma.m00 -= mean;
+            sigma.m11 -= mean;
+            sigma.m22 -= mean;
+            if (sigma.frobenius() > yield) {
                 returnMapping(blade, i, fe, yield);
+                blade.readPlasticDeform(i, fp);
+                fe.set(f).mul(fp.invert());
+                MpmMath.stress(fe, sigma, MU, LAMBDA);
+            } else {
+                sigma.m00 += mean;
+                sigma.m11 += mean;
+                sigma.m22 += mean;
             }
+
+            sigma.m00 += blade.pressure[i];
+            sigma.m11 += blade.pressure[i];
+            sigma.m22 += blade.pressure[i];
 
             float v0 = m * VOLUME_PER_MASS;
 
-            // 网格覆盖 [-0.5, 1.5]，比材料可能扩展的范围大得多，
-            // 这样边缘的"网格墙"在实际使用中够不着。
-            float gxf = (x - GRID_MIN) / GRID_SIZE * NX;
-            float gyf = (y - GRID_MIN) / GRID_SIZE * NY;
-            float gzf = (z - GRID_MIN) / GRID_SIZE * NZ;
+            // Quadratic B-splines are centred on the nearest grid node.
+            float gxf = gridCoordinate(x, NX);
+            float gyf = gridCoordinate(y, NY);
+            float gzf = gridCoordinate(z, NZ);
 
-            int cx = clampCell((int) gxf, NX);
-            int cy = clampCell((int) gyf, NY);
-            int cz = clampCell((int) gzf, NZ);
+            int cx = (int) gxf;
+            int cy = (int) gyf;
+            int cz = (int) gzf;
 
             float fx = gxf - cx;
             float fy = gyf - cy;
@@ -330,14 +273,16 @@ public final class MpmSolver implements SoftBodySolver {
                         float w = wx[ox + 1] * wy[oy + 1] * wz[oz + 1];
                         int idx = index(gx, gy, gz);
 
+                        if (w <= 0) continue;
+                        if (gMass[idx] == 0) active[activeCount++] = idx;
                         gMass[idx] += w * m;
                         gvx[idx] += w * m * blade.vx(i);
                         gvy[idx] += w * m * blade.vy(i);
                         gvz[idx] += w * m * blade.vz(i);
 
-                        float gwx = dw(fx, ox) * wy[oy + 1] * wz[oz + 1];
-                        float gwy = wx[ox + 1] * dw(fy, oy) * wz[oz + 1];
-                        float gwz = wx[ox + 1] * wy[oy + 1] * dw(fz, oz);
+                        float gwx = (NX / GRID_SIZE) * dw(fx, ox) * wy[oy + 1] * wz[oz + 1];
+                        float gwy = wx[ox + 1] * (NY / GRID_SIZE) * dw(fy, oy) * wz[oz + 1];
+                        float gwz = wx[ox + 1] * wy[oy + 1] * (NZ / GRID_SIZE) * dw(fz, oz);
 
                         // σ · ∇w（行主序）
                         float sx = sigma.m00 * gwx + sigma.m01 * gwy + sigma.m02 * gwz;
@@ -355,7 +300,8 @@ public final class MpmSolver implements SoftBodySolver {
 
     /** 网格更新：动量折成速度，再叠加上应力产生的加速度。 */
     private void gridUpdate(float dt) {
-        for (int i = 0; i < CELLS; i++) {
+        for (int j = 0; j < activeCount; j++) {
+            int i = active[j];
             float mass = gMass[i];
             if (mass <= 1.0E-9F) {
                 continue;
@@ -363,7 +309,12 @@ public final class MpmSolver implements SoftBodySolver {
             float inv = 1.0F / mass;
             gvx[i] = gvx[i] * inv + dt * gfx[i] * inv;
             gvy[i] = gvy[i] * inv + dt * gfy[i] * inv;
-            gvz[i] = gvz[i] * inv + dt * gfz[i] * inv;
+            gvz[i] = gvz[i] * inv + dt * (gfz[i] * inv - GRAVITY);
+            int ix = i % NX, iy = (i / NX) % NY, iz = i / (NX * NY) + gridZ0;
+            if (onAnvil(GRID_MIN + ix * (GRID_SIZE / NX), GRID_MIN + iy * (GRID_SIZE / NY))
+                    && GRID_MIN + iz * (GRID_SIZE / NZ) <= FLOOR_Z) {
+                gvz[i] = Math.max(0, gvz[i]);
+            }
         }
     }
 
@@ -376,13 +327,13 @@ public final class MpmSolver implements SoftBodySolver {
         for (int i = 0; i < MpmBlade.COUNT; i++) {
             float x = blade.x(i), y = blade.y(i), z = blade.z(i);
 
-            float gxf = (x - GRID_MIN) / GRID_SIZE * NX;
-            float gyf = (y - GRID_MIN) / GRID_SIZE * NY;
-            float gzf = (z - GRID_MIN) / GRID_SIZE * NZ;
+            float gxf = gridCoordinate(x, NX);
+            float gyf = gridCoordinate(y, NY);
+            float gzf = gridCoordinate(z, NZ);
 
-            int cx = clampCell((int) gxf, NX);
-            int cy = clampCell((int) gyf, NY);
-            int cz = clampCell((int) gzf, NZ);
+            int cx = (int) gxf;
+            int cy = (int) gyf;
+            int cz = (int) gzf;
 
             float fx = gxf - cx;
             float fy = gyf - cy;
@@ -419,9 +370,9 @@ public final class MpmSolver implements SoftBodySolver {
                         nvy += w * gvy[idx];
                         nvz += w * gvz[idx];
 
-                        float dx = dw(fx, ox) * wy[oy + 1] * wz[oz + 1];
-                        float dy = wx[ox + 1] * dw(fy, oy) * wz[oz + 1];
-                        float dz = wx[ox + 1] * wy[oy + 1] * dw(fz, oz);
+                        float dx = (NX / GRID_SIZE) * dw(fx, ox) * wy[oy + 1] * wz[oz + 1];
+                        float dy = wx[ox + 1] * (NY / GRID_SIZE) * dw(fy, oy) * wz[oz + 1];
+                        float dz = wx[ox + 1] * wy[oy + 1] * (NZ / GRID_SIZE) * dw(fz, oz);
 
                         g00 += dx * gvx[idx]; g01 += dy * gvx[idx]; g02 += dz * gvx[idx];
                         g10 += dx * gvy[idx]; g11 += dy * gvy[idx]; g12 += dz * gvy[idx];
@@ -441,8 +392,6 @@ public final class MpmSolver implements SoftBodySolver {
                 continue;
             }
 
-            // 重力：让被推出去的材料自然落回铁砧，而不是漂在空中
-            nvz -= GRAVITY * dt;
 
             blade.setVelocity(i, nvx, nvy, nvz);
 
@@ -498,113 +447,19 @@ public final class MpmSolver implements SoftBodySolver {
         blade.setDeform(i, 6, n20); blade.setDeform(i, 7, n21); blade.setDeform(i, 8, n22);
     }
 
-    /**
-     * 形变矩阵钳制：防止 F 在多次锤击后数值爆炸。
-     *
-     * <p>社区里这类"材料到某个临界点突然崩"的问题，根因通常是 F 或速度发散。
-     * 这里做三件事：</p>
-     * <ul>
-     *   <li>det(F) 偏离 1 太多时拉回来（不可压缩）</li>
-     *   <li>F 的范数封顶，避免应力计算溢出</li>
-     *   <li>保证 F 的九个分量都是有限值</li>
-     * </ul>
-     *
-     * <p>只在"快出事"时介入，平时不碰——否则会像之前那样把体积应力抹掉。</p>
-     */
-    private void clampDeform(MpmBlade blade) {
+    /** Accumulate the volumetric stress before projecting F to unit determinant.
+     * This retains the contact pressure that supports the weight of upper layers. */
+    private void projectDeform(MpmBlade blade) {
         for (int i = 0; i < MpmBlade.COUNT; i++) {
-            loadDeform(blade, i, f);
-
-            if (!f.isFinite()) {
-                blade.setDeform(i, 0, 1.0F); blade.setDeform(i, 1, 0.0F); blade.setDeform(i, 2, 0.0F);
-                blade.setDeform(i, 3, 0.0F); blade.setDeform(i, 4, 1.0F); blade.setDeform(i, 5, 0.0F);
-                blade.setDeform(i, 6, 0.0F); blade.setDeform(i, 7, 0.0F); blade.setDeform(i, 8, 1.0F);
-                continue;
+            blade.readDeform(i, f);
+            float jacobian = f.det();
+            if (!(jacobian > 0) || !Float.isFinite(jacobian)) {
+                throw new ArithmeticException("Invalid material Jacobian at particle " + i);
             }
-
-            float det = f.det();
-            if (det < 0.3F || det > 3.0F) {
-                float s = (float) Math.pow(1.0F / Math.max(det, 1.0E-6F), 1.0 / 3.0);
-                f.scale(s);
-            }
-
-            float norm = f.frobenius();
-            if (norm > 4.0F) {
-                f.scale(4.0F / norm);
-            }
-
-            storeDeform(blade, i, f);
+            blade.pressure[i] += (LAMBDA + blade.pressure[i]) * (jacobian - 1);
+            f.scale((float)(1 / Math.cbrt(jacobian)));
+            blade.writeDeform(i, f);
         }
-    }
-
-    /**
-     * 不可压缩：每个子步结束后把 F 的行列式拉回 1。
-     * 金属被锤只改变形状，不改变体积。
-     */
-    private void enforceIncompressible(MpmBlade blade) {
-        for (int i = 0; i < MpmBlade.COUNT; i++) {
-            loadDeform(blade, i, f);
-            float det = f.det();
-            if (!Float.isFinite(det) || det < 1.0E-6F) {
-                blade.setDeform(i, 0, 1.0F); blade.setDeform(i, 1, 0.0F); blade.setDeform(i, 2, 0.0F);
-                blade.setDeform(i, 3, 0.0F); blade.setDeform(i, 4, 1.0F); blade.setDeform(i, 5, 0.0F);
-                blade.setDeform(i, 6, 0.0F); blade.setDeform(i, 7, 0.0F); blade.setDeform(i, 8, 1.0F);
-                continue;
-            }
-            float s = (float) Math.pow(1.0F / det, 1.0 / 3.0);
-            f.scale(s);
-            storeDeform(blade, i, f);
-        }
-    }
-
-    // ---- 矩阵存取（Blade 用行主序存 9 个 float） ----
-
-    private static void loadDeform(MpmBlade blade, int i, Mat3 out) {
-        out.m00 = blade.deform(i, 0);
-        out.m01 = blade.deform(i, 1);
-        out.m02 = blade.deform(i, 2);
-        out.m10 = blade.deform(i, 3);
-        out.m11 = blade.deform(i, 4);
-        out.m12 = blade.deform(i, 5);
-        out.m20 = blade.deform(i, 6);
-        out.m21 = blade.deform(i, 7);
-        out.m22 = blade.deform(i, 8);
-    }
-
-    private static void storeDeform(MpmBlade blade, int i, Mat3 m) {
-        blade.setDeform(i, 0, m.m00);
-        blade.setDeform(i, 1, m.m01);
-        blade.setDeform(i, 2, m.m02);
-        blade.setDeform(i, 3, m.m10);
-        blade.setDeform(i, 4, m.m11);
-        blade.setDeform(i, 5, m.m12);
-        blade.setDeform(i, 6, m.m20);
-        blade.setDeform(i, 7, m.m21);
-        blade.setDeform(i, 8, m.m22);
-    }
-
-    private static void loadPlasticDeform(MpmBlade blade, int i, Mat3 out) {
-        out.m00 = blade.plasticDeform(i, 0);
-        out.m01 = blade.plasticDeform(i, 1);
-        out.m02 = blade.plasticDeform(i, 2);
-        out.m10 = blade.plasticDeform(i, 3);
-        out.m11 = blade.plasticDeform(i, 4);
-        out.m12 = blade.plasticDeform(i, 5);
-        out.m20 = blade.plasticDeform(i, 6);
-        out.m21 = blade.plasticDeform(i, 7);
-        out.m22 = blade.plasticDeform(i, 8);
-    }
-
-    private static void storePlasticDeform(MpmBlade blade, int i, Mat3 m) {
-        blade.setPlasticDeform(i, 0, m.m00);
-        blade.setPlasticDeform(i, 1, m.m01);
-        blade.setPlasticDeform(i, 2, m.m02);
-        blade.setPlasticDeform(i, 3, m.m10);
-        blade.setPlasticDeform(i, 4, m.m11);
-        blade.setPlasticDeform(i, 5, m.m12);
-        blade.setPlasticDeform(i, 6, m.m20);
-        blade.setPlasticDeform(i, 7, m.m21);
-        blade.setPlasticDeform(i, 8, m.m22);
     }
 
     // ---- B 样条 ----
@@ -624,24 +479,13 @@ public final class MpmSolver implements SoftBodySolver {
         };
     }
 
-    private static int index(int x, int y, int z) {
-        return x + y * NX + z * NX * NY;
+    private int index(int x, int y, int z) {
+        return x + y * NX + (z - gridZ0) * NX * NY;
     }
 
-    private static int clampCell(int v, int max) {
-        return Math.max(0, Math.min(max - 1, v));
-    }
-
-    private static float clampUnit(float v) {
-        return Math.max(-1.0F, Math.min(1.0F, v));
-    }
-
-    private static float clampMove(float v, float max) {
-        return Math.max(-max, Math.min(max, v));
-    }
-
-    private static float clamp01(float v) {
-        return Math.max(0.0F, Math.min(1.0F, v));
+    private static float gridCoordinate(float position, int nodes) {
+        return Math.clamp((position - GRID_MIN) * (nodes / GRID_SIZE) + 0.5F,
+                1, Math.nextDown((float)nodes - 1));
     }
 
     private static float clampSpeed(float v) {

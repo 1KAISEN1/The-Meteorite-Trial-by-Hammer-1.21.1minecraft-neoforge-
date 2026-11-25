@@ -15,7 +15,8 @@ import net.minecraft.nbt.CompoundTag;
 public final class MpmBlade {
 
     /** 粒子数。alpha 阶段先堆料，验证可行性优先于性能。 */
-    public static final int COUNT = 20_000;
+    static final int SAMPLES_X = 100, SAMPLES_Y = 25, SAMPLES_Z = 8;
+    public static final int COUNT = SAMPLES_X * SAMPLES_Y * SAMPLES_Z;
 
     /**
      * 剑坯在方块内的占位。
@@ -61,8 +62,13 @@ public final class MpmBlade {
     /** 累积塑性应变，用于冷作硬化。 */
     private final float[] plasticStrain = new float[COUNT];
 
+    // Hydrostatic pressure is independent of the isochoric deformation gradient.
+    final float[] pressure = new float[COUNT];
+    private final double initialVolume;
+
     public MpmBlade() {
         initBlock();
+        initialVolume = MaterialVolume.measure(this);
     }
 
     /**
@@ -75,11 +81,10 @@ public final class MpmBlade {
      * <p>抖动是确定性的（哈希而非随机数），所以同样的剑胚永远得到同样的分布。</p>
      */
     private void initBlock() {
-        // 50 × 25 × 8 = 10,000
         // 厚度方向给到 8 层：只有 2 层的话，粒子云是一张纸，
         // 压不出体积感，也建立不了厚度方向的应力梯度。
-        final int nx = 100, ny = 25, nz = 8;
-        final float perParticle = 2.7E8F / COUNT; // 约 27,000 nB
+        final int nx = SAMPLES_X, ny = SAMPLES_Y, nz = SAMPLES_Z;
+        final float perParticle = 2.7E8F / COUNT; // 13,500 nB
 
         // 一格的实际尺寸，抖动幅度取它的六成
         final float cellX = (X_MAX - X_MIN) / nx;
@@ -144,8 +149,8 @@ public final class MpmBlade {
         ROUND(1.0F, 1.0F),
         /** 平头：正方形作用区，压得均匀。 */
         FLAT(1.0F, 1.0F),
-        /** 横锤：沿 X 的一条窄线，强制材料沿 Y 流动。 */
-        CROSS_PEEN(2.2F, 0.35F);
+        /** 横锤：沿 Y 的窄面，主要沿 X 抽长。 */
+        CROSS_PEEN(0.35F, 2.2F);
 
         final float scaleX;
         final float scaleY;
@@ -157,90 +162,80 @@ public final class MpmBlade {
     }
 
     /**
-     * 锤面压入：模拟真实锤子"占空间"而不是"给速度"。
-     *
-     * <p>之前是给作用区内的粒子加一个速度脉冲，结果脉冲被 MPM 的网格平均、
-     * 被应力抵抗、被阻尼吃掉，材料只是轻轻抖一下。</p>
-     *
-     * <p>真实锤子是一个位移边界：锤面压进去，材料必须让开。
-     * 这里改成：</p>
-     * <ol>
-     *   <li>先找到作用区当前的最高点，确定锤面高度</li>
-     *   <li>锤面以上的粒子被直接压到锤面（位移约束）</li>
-     *   <li>被压开的体积给一个向外的速度，让它流向四周（体积守恒）</li>
-     * </ol>
-     *
-     * @param sx       落点 X
-     * @param sy       落点 Y
-     * @param depth    压入深度（占 Z 的比例）
-     * @param radius   基准影响半径
-     * @param shape    锤头形状
-     * @return 实际压下去的体积（相对量），可用于相机震动、音效等
+     * Apply a smooth, volume-preserving draw through the full local thickness.
+     * A strip stretches along the face normal in the work plane. Material beyond
+     * it translates with that strip, so the footprint cannot tear a hole at its rim.
+     * Returns the summed downward displacement under the face (zero for a miss).
      */
     public float press(float sx, float sy, float depth, float radius, HammerShape shape) {
-        float rx = radius * shape.scaleX;
-        float ry = radius * shape.scaleY;
-
-        // 1. 找作用区最高点
-        float maxZ = -Float.MAX_VALUE;
+        if (!(depth > 0 && radius > 0)) return 0;
+        float rx = radius * shape.scaleX, ry = radius * shape.scaleY;
+        float bottom = Float.POSITIVE_INFINITY, top = Float.NEGATIVE_INFINITY;
         for (int i = 0; i < COUNT; i++) {
-            float dx = (px[i] - sx) / rx;
-            float dy = (py[i] - sy) / ry;
-            if (dx * dx + dy * dy > 1.0F) {
-                continue;
-            }
-            if (pz[i] > maxZ) {
-                maxZ = pz[i];
+            float u = (px[i] - sx) / rx, v = (py[i] - sy) / ry;
+            if (Math.abs(u) < 1 && Math.abs(v) < 1) {
+                bottom = Math.min(bottom, pz[i]);
+                top = Math.max(top, pz[i]);
             }
         }
-        if (maxZ < -1.0E6F) {
-            return 0.0F;
+        if (!(top > bottom)) return 0;
+
+        // Limit a single stroke relative to the remaining local thickness.
+        float fraction = Math.min(0.18F, depth / (top - bottom));
+        float stretch = 1 / (1 - fraction);
+        float xStretch = shape == HammerShape.CROSS_PEEN ? stretch : (float) Math.sqrt(stretch);
+        float pushed = drawStrip(px, py, sx, sy, rx, ry, bottom, xStretch - 1, false);
+        if (shape != HammerShape.CROSS_PEEN) {
+            pushed += drawStrip(py, px, sy, sx, ry, rx, bottom, stretch / xStretch - 1, true);
         }
+        projectVolume();
+        return pushed;
+    }
 
-        // 2. 锤面高度
-        float surface = maxZ - depth;
-        float pushed = 0.0F;
-
+    private float drawStrip(float[] along, float[] across, float center, float lateralCenter,
+                            float radius, float lateralRadius, float bottom, float amount, boolean alongY) {
+        float pushed = 0;
+        Mat3 oldF = new Mat3(), inverseElastic = new Mat3(), mapped = new Mat3();
         for (int i = 0; i < COUNT; i++) {
-            float dx = (px[i] - sx) / rx;
-            float dy = (py[i] - sy) / ry;
-            float d2 = dx * dx + dy * dy;
-            if (d2 > 1.0F) {
-                continue;
+            float v = (across[i] - lateralCenter) / lateralRadius;
+            float u = (along[i] - center) / radius;
+            if (Math.abs(v) >= 1 || (!alongY && u <= -1)) continue;
+            u = Math.clamp(u, -1, 1);
+            float ux = 1 - u * u, vyWeight = 1 - v * v;
+            float b = ux * ux, w = vyWeight * vyWeight;
+            // Integral of (1-u^2)^2. Anchor X at the held end; spread Y symmetrically.
+            float integral = u * (1 + u * u * (-2.0F / 3 + u * u / 5))
+                    + (alongY ? 0 : 8.0F / 15);
+            float d = 1 + amount * w * b;
+            // Beyond the face only translation and shear remain.
+            float h = (pz[i] - bottom) / d;
+            along[i] += radius * amount * w * integral;
+            float drop = (pz[i] - bottom) - h;
+            pz[i] -= drop;
+            pushed += Math.max(0, drop);
+
+            // Jacobian in (along, across, z) has diagonal (d, 1, 1/d).
+            // Apply the same map to F so the constitutive model sees the stroke.
+            float dw = -4 * v * vyWeight / lateralRadius;
+            float shear = radius * amount * dw * integral;
+            float za = h / d * amount * w * 4 * u * ux / radius;
+            float zb = -h / d * amount * dw * b;
+            int a = i * 9 + (alongY ? 3 : 0), c = i * 9 + (alongY ? 0 : 3), z = i * 9 + 6;
+            if (d == 1 && shear == 0 && za == 0 && zb == 0) continue;
+            // press prescribes a permanent stroke. Retain the pre-stroke Fe
+            // (including any rigid rotation) when changing the material state.
+            oldF.read(deform, i * 9);
+            inverseElastic.read(plasticDeform, i * 9).mul(oldF.invert());
+            for (int k = 0; k < 3; k++) {
+                deform[z+k] = za * deform[a+k] + zb * deform[c+k] + deform[z+k] / d;
+                deform[a+k] = d * deform[a+k] + shear * deform[c+k];
             }
-            if (pz[i] <= surface) {
-                continue;
-            }
-
-            // 3. 位移约束：压到锤面
-            float over = pz[i] - surface;
-            pz[i] = surface;
-            pushed += over;
-
-            // 4. 体积重分配：压掉的高度直接变成水平位移。
-            //
-            //    关键是各向异性：锻造是"延展"，不是"均匀摊开"。
-            //    材料优先沿 X（刀身方向）流，Y（宽度）方向只给一点点——
-            //    否则宽度会跟着一起涨，刀越锤越宽。
-            float ox = px[i] - sx;
-            float oy = py[i] - sy;
-            float r = (float) Math.sqrt(ox * ox + oy * oy);
-            float push = over * 0.8F;
-
-            if (r > 1.0E-6F) {
-                px[i] += (ox / r) * push * 8.0F;   // X 方向流得远
-                py[i] += (oy / r) * push * 0.15F;  // Y 方向几乎不流
-            } else {
-                // 正中锤心：用索引哈希给个确定方向，避免除零（不用随机）
-                float a = hash01(i, 7) * 6.2831853F;
-                px[i] += (float) Math.cos(a) * push * 3.0F;
-                py[i] += (float) Math.sin(a) * push * 0.15F;
-            }
-
-            // 5. 被压过的粒子会冷作硬化
-            plasticStrain[i] = Math.min(10.0F, plasticStrain[i] + over * 2.0F);
+            mapped.read(deform, i * 9);
+            inverseElastic.mul(mapped);
+            inverseElastic.scale((float) (1 / Math.cbrt(inverseElastic.det())));
+            inverseElastic.write(plasticDeform, i * 9);
+            addPlasticStrain(i, (float) Math.log(d));
         }
-
         return pushed;
     }
 
@@ -316,65 +311,75 @@ public final class MpmBlade {
         java.util.Arrays.fill(vz, 0.0F);
     }
 
-    /**
-     * 翻面：把工件绕长轴（X）旋转 90°。
-     *
-     * <p>现实中抽长会让工件变宽，铁匠会把工件翻过来锤窄，反复交替。
-     * 没有翻面，材料只会越锤越宽，做不出细长的刀身。</p>
-     *
-     * <p>旋转 90° 后，厚度方向变成宽度方向，所以下一次抽长压的是
-     * 原来的"宽"，这样两个方向轮流被压薄，最终形成长条。</p>
-     */
+    /** Stand the workpiece on its edge (the original quarter turn). */
     public void flip() {
-        // 以包围盒中心为旋转轴，避免工件整体漂移
-        float sumY = 0.0F, sumZ = 0.0F;
+        turnAboutX(true);
+    }
+
+    /** Present the opposite broad face for a second pass. */
+    public void turnOver() {
+        turnAboutX(false);
+    }
+
+    private void turnAboutX(boolean quarterTurn) {
+        double sumY = 0, sumZ = 0;
         for (int i = 0; i < COUNT; i++) {
             sumY += py[i];
             sumZ += pz[i];
         }
-        float cy = sumY / COUNT;
-        float cz = sumZ / COUNT;
-
+        float cy = (float) (sumY / COUNT), cz = (float) (sumZ / COUNT);
+        float lowestSupported = Float.POSITIVE_INFINITY;
         for (int i = 0; i < COUNT; i++) {
-            float dy = py[i] - cy;
-            float dz = pz[i] - cz;
+            float dy = py[i] - cy, dz = pz[i] - cz;
+            py[i] = cy - (quarterTurn ? dz : dy);
+            pz[i] = cz + (quarterTurn ? dy : -dz);
+            if (MpmSolver.onAnvil(px[i], py[i])) lowestSupported = Math.min(lowestSupported, pz[i]);
 
-            // 绕 X 轴 90°：y' = cz - dz, z' = cy + dy
-            py[i] = cy - dz;
-            pz[i] = cz + dy;
-
-            float vyi = vy[i];
-            float vzi = vz[i];
-            vy[i] = -vzi;
-            vz[i] = vyi;
-
-            // 形变矩阵跟着转：F' = R · F，R 是绕 X 轴 90° 的旋转
-            //   row0' =  row0
-            //   row1' = -row2
-            //   row2' =  row1
-            float f10 = deform[i * 9 + 3], f11 = deform[i * 9 + 4], f12 = deform[i * 9 + 5];
-            float f20 = deform[i * 9 + 6], f21 = deform[i * 9 + 7], f22 = deform[i * 9 + 8];
-
-            deform[i * 9 + 3] = -f20;
-            deform[i * 9 + 4] = -f21;
-            deform[i * 9 + 5] = -f22;
-
-            deform[i * 9 + 6] = f10;
-            deform[i * 9 + 7] = f11;
-            deform[i * 9 + 8] = f12;
-
-            // 塑性形变也要跟着转，否则翻面后"永久变形"的方向就错了
-            float p10 = plasticDeform[i * 9 + 3], p11 = plasticDeform[i * 9 + 4], p12 = plasticDeform[i * 9 + 5];
-            float p20 = plasticDeform[i * 9 + 6], p21 = plasticDeform[i * 9 + 7], p22 = plasticDeform[i * 9 + 8];
-
-            plasticDeform[i * 9 + 3] = -p20;
-            plasticDeform[i * 9 + 4] = -p21;
-            plasticDeform[i * 9 + 5] = -p22;
-
-            plasticDeform[i * 9 + 6] = p10;
-            plasticDeform[i * 9 + 7] = p11;
-            plasticDeform[i * 9 + 8] = p12;
+            float oldVy = vy[i];
+            vy[i] = quarterTurn ? -vz[i] : -vy[i];
+            vz[i] = quarterTurn ? oldVy : -vz[i];
+            // A spatial rotation acts on F and Fe. Fp is in material coordinates.
+            for (int k = i * 9 + 3; k < i * 9 + 6; k++) {
+                float oldY = deform[k];
+                deform[k] = quarterTurn ? -deform[k + 3] : -oldY;
+                deform[k + 3] = quarterTurn ? oldY : -deform[k + 3];
+            }
         }
+        if (lowestSupported < MpmSolver.FLOOR_Z) {
+            float lift = MpmSolver.FLOOR_Z - lowestSupported;
+            for (int i = 0; i < COUNT; i++) pz[i] += lift;
+        }
+    }
+
+    void correctWidth(int i, float displacement, float gradientX, float stretch) {
+        py[i] += displacement;
+        int offset = i * 9;
+        for (int k = offset; k < offset + 3; k++) {
+            deform[k + 3] = gradientX * deform[k] + stretch * deform[k + 3];
+        }
+        float iso = (float)(1 / Math.cbrt(stretch));
+        for (int k = offset; k < offset + 9; k++) deform[k] *= iso;
+        pressure[i] += (MpmSolver.LAMBDA + pressure[i]) * (stretch - 1);
+    }
+
+    Mat3 readDeform(int i, Mat3 matrix) {
+        return matrix.read(deform, i * 9);
+    }
+
+    Mat3 readPlasticDeform(int i, Mat3 matrix) {
+        return matrix.read(plasticDeform, i * 9);
+    }
+
+    void writeDeform(int i, Mat3 matrix) {
+        matrix.write(deform, i * 9);
+    }
+
+    void writePlasticDeform(int i, Mat3 matrix) {
+        matrix.write(plasticDeform, i * 9);
+    }
+
+    void projectVolume() {
+        MaterialVolume.project(this, initialVolume);
     }
 
     public float x(int i) { return px[i]; }

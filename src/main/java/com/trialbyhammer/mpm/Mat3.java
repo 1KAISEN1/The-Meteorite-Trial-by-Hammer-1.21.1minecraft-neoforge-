@@ -30,6 +30,19 @@ public final class Mat3 {
         return this;
     }
 
+    Mat3 read(float[] data, int i) {
+        m00 = data[i];   m01 = data[i+1]; m02 = data[i+2];
+        m10 = data[i+3]; m11 = data[i+4]; m12 = data[i+5];
+        m20 = data[i+6]; m21 = data[i+7]; m22 = data[i+8];
+        return this;
+    }
+
+    void write(float[] data, int i) {
+        data[i] = m00;   data[i+1] = m01; data[i+2] = m02;
+        data[i+3] = m10; data[i+4] = m11; data[i+5] = m12;
+        data[i+6] = m20; data[i+7] = m21; data[i+8] = m22;
+    }
+
     public float det() {
         return m00 * (m11 * m22 - m12 * m21)
              - m01 * (m10 * m22 - m12 * m20)

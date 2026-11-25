@@ -20,26 +20,47 @@ public final class MpmSelfTest {
     private static final int SUBSTEPS = 20;
 
     public static void main(String[] args) throws Exception {
-        new File("build/mpm").mkdirs();
+        boolean narrow = args.length == 1 && args[0].equals("narrow");
+        String dir = narrow ? "build/mpm/narrow" : "build/mpm";
+        new File(dir).mkdirs();
 
         MpmBlade blade = new MpmBlade();
         MpmSolver solver = new MpmSolver();
 
+        verifyPressAndTurn();
+        double initialVolume = enclosedVolume(blade);
+        float lastLength = bounds(blade)[0];
+        check(blade.press(-1, -1, 0.05F, 0.04F, MpmBlade.HammerShape.CROSS_PEEN) == 0,
+                "A miss must leave the workpiece alone");
         System.out.println("=== 初始 ===");
-        report(blade);
+        report(blade, initialVolume);
         thicknessProfile(blade);
 
         // 模拟真实节奏：抽长一轮 → 翻面 → 再抽长一轮。
         // 每锤拍一帧，能看到材料是"怎么"流动的，而不是只看起点终点。
-        new File("build/mpm/frames").mkdirs();
+        new File(dir + "/frames").mkdirs();
         int frame = 0;
-        renderFrame(blade, "build/mpm/frames/f" + String.format("%03d", frame) + ".png");
+        renderFrame(blade, dir + "/frames/f" + String.format("%03d", frame) + ".png");
         frame++;
 
         for (int pass = 0; pass < 2; pass++) {
             for (int round = 1; round <= 18; round++) {
-                float sx = 0.18F + ((round - 1) % 12) * 0.055F;
-                blade.press(sx, 0.60F, 0.02F, 0.04F, MpmBlade.HammerShape.CROSS_PEEN);
+                // The sculpting replay works the end while it is still within the block,
+                // then draws out the body. The narrow replay retains the original footprint.
+                float sx;
+                if (narrow) {
+                    sx = 0.18F + ((round - 1) % 12) * 0.055F;
+                } else if (pass == 0 && round <= 4) {
+                    sx = 0.896F + (round - 1) * 0.004F;
+                } else if (pass == 0) {
+                    sx = 0.18F + (round - 5) * 0.048F;
+                } else {
+                    sx = 0.18F + (round - 1) * 0.041F;
+                }
+                float sy = pass == 0 ? 0.60F : 0.40F;
+                float pushed = blade.press(sx, sy, 0.05F, narrow ? 0.04F : 0.095F,
+                        MpmBlade.HammerShape.CROSS_PEEN);
+                check(pushed > 0, "Missed contact on pass " + pass + ", hit " + round);
                 solver.step(blade, DT, SUBSTEPS);
 
                 // 逐锤打印：突变会表现为某一锤的数据跳变
@@ -47,146 +68,139 @@ public final class MpmSelfTest {
                 System.out.printf("  p%d h%02d  X %.3f  Y %.3f  Z %.3f  v %.3f%n",
                         pass + 1, round, s[0], s[1], s[2], s[3]);
 
-                renderFrame(blade, "build/mpm/frames/f" + String.format("%03d", frame) + ".png");
+                check(s[0] > lastLength && s[1] > s[2], "Draw or aspect regression at hit " + round);
+                lastLength = s[0];
+                double drift = Math.abs(enclosedVolume(blade) / initialVolume - 1);
+                check(drift < 2e-6, "Geometric volume drift " + drift);
+                renderFrame(blade, dir + "/frames/f" + String.format("%03d", frame) + ".png");
                 frame++;
             }
 
             System.out.println("=== 第 " + (pass + 1) + " 轮抽长后 ===");
-            report(blade);
-            thicknessProfile(blade);
+            report(blade, initialVolume);
+            float[] thickness = thicknessProfile(blade);
+            if (pass == 1) {
+                check(thickness[4] < thickness[0] * (narrow ? 0.95 : 0.85), "Worked edge should be thinner than the back");
+                float body = sectionWidth(blade, 0.55F, 0.65F);
+                float tip = sectionWidth(blade, 0.95F, 0.99F);
+                System.out.printf("  section width: body %.4f  tip %.4f%n", body, tip);
+                check(tip < 0.7F * body, "Tip should narrow along the replayed stroke path");
+            }
 
             if (pass == 0) {
-                blade.flip();
+                blade.turnOver();
                 System.out.println("=== 翻面 ===");
-                report(blade);
+                report(blade, initialVolume);
             }
         }
 
         System.out.printf("  塑性事件: %d 生效, %d 跳过（形变不够）%n",
                 solver.plasticEvents, solver.plasticSkipped);
-        renderViews(blade, "build/mpm/shaped");
+        renderViews(blade, dir + "/shaped");
     }
 
-    /** 单帧：俯视图，用于拼成过程动画。 */
+    private static void verifyPressAndTurn() {
+        for (MpmBlade.HammerShape face : MpmBlade.HammerShape.values()) {
+            MpmBlade sample = new MpmBlade();
+            double volume = enclosedVolume(sample);
+            check(sample.press(0.50F, 0.57F, 0.05F, 0.08F, face) > 0, "No contact for " + face);
+            float[] flat = bounds(sample);
+            float jp = sample.plasticDeform(MpmBlade.COUNT / 2, 4);
+            sample.flip();
+            float[] upright = bounds(sample);
+            check(Math.abs(flat[1] - upright[2]) < 1e-5 && Math.abs(flat[2] - upright[1]) < 1e-5,
+                    "Quarter turn must stand the piece on edge");
+            check(jp == sample.plasticDeform(MpmBlade.COUNT / 2, 4), "Rigid turn changed plastic state");
+            sample.turnOver();
+            check(Math.abs(enclosedVolume(sample) / volume - 1) < 2e-6, "Press or turn lost volume");
+        }
+    }
+
+    private static void check(boolean condition, String message) {
+        if (!condition) throw new AssertionError(message);
+    }
+
+    private static float sectionWidth(MpmBlade blade, float from, float to) {
+        float left = Float.POSITIVE_INFINITY, right = Float.NEGATIVE_INFINITY;
+        for (int i = 0; i < MpmBlade.COUNT; i++) {
+            left = Math.min(left, blade.x(i));
+            right = Math.max(right, blade.x(i));
+        }
+        float low = Float.POSITIVE_INFINITY, high = Float.NEGATIVE_INFINITY;
+        int count = 0;
+        for (int i = 0; i < MpmBlade.COUNT; i++) {
+            float fraction = (blade.x(i) - left) / (right - left);
+            if (fraction >= from && fraction <= to) {
+                low = Math.min(low, blade.y(i));
+                high = Math.max(high, blade.y(i));
+                count++;
+            }
+        }
+        check(count >= MpmBlade.SAMPLES_Z, "Section has too few material samples");
+        return high - low;
+    }
+
     private static void renderFrame(MpmBlade blade, String path) throws Exception {
-        int size = 400;
-        BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_RGB);
-        Graphics2D g = img.createGraphics();
-        g.setColor(new Color(18, 18, 22));
-        g.fillRect(0, 0, size, size);
-
-        for (int i = 0; i < MpmBlade.COUNT; i++) {
-            int px = (int) (blade.x(i) * size);
-            int py = (int) ((1.0F - blade.y(i)) * size);
-            if (px < 0 || px >= size || py < 0 || py >= size) {
-                continue;
-            }
-            g.setColor(new Color(255, 170, 60));
-            g.fillRect(px, py, 2, 2);
-        }
-        g.dispose();
-        ImageIO.write(img, "png", new File(path));
+        render(blade, path, false);
     }
 
-    /**
-     * 沿 Y 方向分 8 段，统计每段的**厚度**（该段粒子 Z 的跨度）。
-     *
-     * <p>如果刃口（Y 大）比刀背（Y 小）明显薄，坡度就出来了。</p>
-     */
-    private static void thicknessProfile(MpmBlade blade) {
-        int bands = 8;
-        float[] zMin = new float[bands];
-        float[] zMax = new float[bands];
+    /** Mean separation of the two material faces in each original width band.
+     * Pairing the samples locally excludes the slope of an unsupported section. */
+    private static float[] thicknessProfile(MpmBlade blade) {
+        int bands = 5;
         int[] count = new int[bands];
-
-        java.util.Arrays.fill(zMin, Float.MAX_VALUE);
-        java.util.Arrays.fill(zMax, -Float.MAX_VALUE);
-
-        float yMin = 0.30F, yMax = 0.70F;
-
-        for (int i = 0; i < MpmBlade.COUNT; i++) {
-            float y = blade.y(i);
-            if (y < yMin || y >= yMax) {
-                continue;
+        float[] profile = new float[bands];
+        for (int x = 0; x < MpmBlade.SAMPLES_X; x++) {
+            for (int y = 0; y < MpmBlade.SAMPLES_Y; y++) {
+                int i = (x * MpmBlade.SAMPLES_Y + y) * MpmBlade.SAMPLES_Z;
+                int band = y * bands / MpmBlade.SAMPLES_Y;
+                profile[band] += Math.abs(blade.z(i) - blade.z(i + MpmBlade.SAMPLES_Z - 1));
+                count[band]++;
             }
-            int b = (int) ((y - yMin) / (yMax - yMin) * bands);
-            b = Math.max(0, Math.min(bands - 1, b));
-            float z = blade.z(i);
-            zMin[b] = Math.min(zMin[b], z);
-            zMax[b] = Math.max(zMax[b], z);
-            count[b]++;
         }
-
-        System.out.print("  厚度分布（刀背→刃口）: ");
-        for (int b = 0; b < bands; b++) {
-            float thickness = count[b] > 0 ? zMax[b] - zMin[b] : 0.0F;
-            System.out.printf("%.3f ", thickness);
+        System.out.print("  local thickness (material Y, low to high):");
+        for (int i = 0; i < bands; i++) {
+            profile[i] /= count[i];
+            System.out.printf(" %.4f", profile[i]);
         }
         System.out.println();
+        return profile;
     }
 
     private static void renderViews(MpmBlade blade, String prefix) throws Exception {
-        topView(blade, prefix + "_top.png");
-        sideView(blade, prefix + "_side.png");
-        System.out.println("  images: " + prefix + "_top.png / _side.png");
+        render(blade, prefix + "_top.png", false);
+        render(blade, prefix + "_side.png", true);
     }
 
-    private static void topView(MpmBlade blade, String path) throws Exception {
-        int size = 600;
-        BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_RGB);
-        Graphics2D g = img.createGraphics();
-        g.setColor(new Color(18, 18, 22));
-        g.fillRect(0, 0, size, size);
-
-        g.setColor(new Color(70, 70, 82));
-        g.drawRect(1, 1, size - 2, size - 2);
-        g.setColor(new Color(125, 125, 140));
-        g.fillRoundRect(size / 2 - 90, 26, 180, 44, 12, 12);
-
+    private static void render(MpmBlade blade, String path, boolean side) throws Exception {
+        int w = 820, h = side ? 228 : 340;
+        // Reserve the original block and include material that extends past either end.
+        float lo = 0, hi = 1;
+        float lowV = Float.POSITIVE_INFINITY, highV = Float.NEGATIVE_INFINITY;
         for (int i = 0; i < MpmBlade.COUNT; i++) {
-            int px = (int) (blade.x(i) * size);
-            int py = (int) ((1.0F - blade.y(i)) * size);
-            if (px < 0 || px >= size || py < 0 || py >= size) {
-                continue;
-            }
-            // 钳制到 0..255：材料掉出画布时 z 可能为负，不钳会抛异常
-            int shade = clamp255(100 + (int) (150 * Math.min(1.0F, Math.max(0.0F, blade.z(i) * 2.0F))));
-            g.setColor(new Color(clamp255(shade + 80), clamp255(shade / 2 + 30), 25));
-            g.fillRect(px, py, 2, 2);
+            lo = Math.min(lo, blade.x(i)); hi = Math.max(hi, blade.x(i));
+            float v = side ? blade.z(i) : blade.y(i);
+            lowV = Math.min(lowV, v); highV = Math.max(highV, v);
         }
-        g.dispose();
-        ImageIO.write(img, "png", new File(path));
-    }
-
-    private static int clamp255(int v) {
-        return Math.max(0, Math.min(255, v));
-    }
-
-    private static void sideView(MpmBlade blade, String path) throws Exception {
-        int w = 600, h = 260;
+        float scale = Math.min((w - 48) / (hi - lo), (h - 48) / (highV - lowV));
+        float left = (w - (hi - lo) * scale) / 2;
+        float mid = (lowV + highV) / 2;
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
         g.setColor(new Color(18, 18, 22));
         g.fillRect(0, 0, w, h);
-
-        // Z 轴放大：只显示铁砧附近 0.28–0.46，厚度变化才看得清
-        final float zMin = 0.28F, zMax = 0.46F;
-        int anvilY = (int) ((1.0F - (MpmSolver.FLOOR_Z - zMin) / (zMax - zMin)) * h);
-
-        g.setColor(new Color(62, 62, 72));
-        g.fillRect(0, anvilY, w, h - anvilY);
-        g.setColor(new Color(120, 120, 135));
-        g.drawLine(0, anvilY, w, anvilY);
-
-        g.setColor(new Color(125, 125, 140));
-        g.fillRect(w / 2 - 55, 12, 110, 32);
-        g.fillRect(w / 2 - 10, 44, 20, 74);
-
+        if (side) {
+            int floor = Math.round(h / 2F - (MpmSolver.FLOOR_Z - mid) * scale);
+            int start = Math.round(left + (MpmSolver.ANVIL_X0 - lo) * scale);
+            g.setColor(new Color(62, 62, 72));
+            g.fillRect(start, floor, Math.round((MpmSolver.ANVIL_X1 - MpmSolver.ANVIL_X0) * scale), h);
+        }
+        g.setColor(new Color(255, 170, 60));
         for (int i = 0; i < MpmBlade.COUNT; i++) {
-            int px = (int) (blade.x(i) * w);
-            int py = (int) ((1.0F - (blade.z(i) - zMin) / (zMax - zMin)) * h);
-            g.setColor(new Color(255, 170, 60));
-            g.fillRect(px, py, 1, 1);
+            float v = side ? blade.z(i) : blade.y(i);
+            int x = Math.round(left + (blade.x(i) - lo) * scale);
+            int y = Math.round(h / 2F - (v - mid) * scale);
+            g.fillRect(x, y, 2, 2);
         }
         g.dispose();
         ImageIO.write(img, "png", new File(path));
@@ -213,12 +227,36 @@ public final class MpmSelfTest {
         return new float[]{maxX - minX, maxY - minY, maxZ - minZ, maxSpeed};
     }
 
-    private static void report(MpmBlade blade) {
+    // Integrate material cells independently of the solver's F and bounding box.
+    private static double enclosedVolume(MpmBlade b) {
+        int dx = MpmBlade.SAMPLES_Y * MpmBlade.SAMPLES_Z, dy = MpmBlade.SAMPLES_Z;
+        double sum = 0;
+        for (int x = 0; x < MpmBlade.SAMPLES_X - 1; x++)
+            for (int y = 0; y < MpmBlade.SAMPLES_Y - 1; y++)
+                for (int z = 0; z < MpmBlade.SAMPLES_Z - 1; z++) {
+                    int a = x * dx + y * dy + z, t = a + dx + dy + 1;
+                    sum += tetra(b,a,a+dx,a+dx+dy,t) + tetra(b,a,a+dx+dy,a+dy,t)
+                            + tetra(b,a,a+dy,a+dy+1,t) + tetra(b,a,a+dy+1,a+1,t)
+                            + tetra(b,a,a+1,a+dx+1,t) + tetra(b,a,a+dx+1,a+dx,t);
+                }
+        return sum / 6;
+    }
+
+    private static double tetra(MpmBlade b, int a, int i, int j, int k) {
+        double x = b.x(i)-b.x(a), y = b.y(i)-b.y(a), z = b.z(i)-b.z(a);
+        double u = b.x(j)-b.x(a), v = b.y(j)-b.y(a), w = b.z(j)-b.z(a);
+        double l = b.x(k)-b.x(a), m = b.y(k)-b.y(a), n = b.z(k)-b.z(a);
+        return x*(v*n-w*m) + y*(w*l-u*n) + z*(u*m-v*l);
+    }
+
+    private static void report(MpmBlade blade, double initialVolume) {
         float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
         float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
         float minZ = Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
         float maxSpeed = 0.0F;
         double totalMass = 0.0;
+        double volume = 0, fError = 0, fpError = 0;
+        Mat3 matrix = new Mat3();
         int nanCount = 0;
         int outOfBounds = 0;
 
@@ -244,6 +282,10 @@ public final class MpmSelfTest {
             maxSpeed = Math.max(maxSpeed, speed);
 
             totalMass += blade.mass(i);
+            float jacobian = blade.readDeform(i, matrix).det();
+            volume += jacobian;
+            fError = Math.max(fError, Math.abs(jacobian - 1));
+            fpError = Math.max(fpError, Math.abs(blade.readPlasticDeform(i, matrix).det() - 1));
 
             if (x < 0.0F || x > 1.0F || y < 0.0F || y > 1.0F || z < 0.0F || z > 1.0F) {
                 outOfBounds++;
@@ -252,9 +294,14 @@ public final class MpmSelfTest {
 
         System.out.printf("  X: %.3f .. %.3f   Y: %.3f .. %.3f   Z: %.3f .. %.3f%n",
                 minX, maxX, minY, maxY, minZ, maxZ);
-        System.out.printf("  size: %.3f x %.3f x %.3f  speed %.4f  oob %d  nan %d  mass %.4e%n",
+        System.out.printf("  size: %.3f x %.3f x %.3f  speed %.4f  outside-block %d  nan %d  mass %.4e%n",
                 maxX - minX, maxY - minY, maxZ - minZ, maxSpeed, outOfBounds, nanCount, totalMass);
 
+        System.out.printf("  mean J %.7f  max |Jp-1| %.7f  enclosed %.9f%n",
+                volume / MpmBlade.COUNT, fpError, enclosedVolume(blade));
+        check(nanCount == 0 && totalMass == 2.7e8, "Non-finite state or mass loss");
+        check(fError < 5e-5 && fpError < 5e-5, "Invalid local material volume");
+        check(Math.abs(enclosedVolume(blade) / initialVolume - 1) < 2e-6, "Invalid enclosed volume");
         // 悬空段诊断：X 超过铁砧范围的部分，平均 Z 应该明显低于铁砧面
         double hangZ = 0.0;
         int hangCount = 0;

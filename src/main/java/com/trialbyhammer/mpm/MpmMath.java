@@ -35,10 +35,10 @@ public final class MpmMath {
     }
 
     /**
-     * Cauchy 应力（固定 corotated 模型）：
+     * Kirchhoff 应力（固定 corotated 模型）：
      *
      * <pre>
-     * σ = 2μ(F − R) + λ(J − 1)·J·F⁻ᵀ
+     * τ = 2μ(F − R)Fᵀ + λ(J − 1)·J·I
      * </pre>
      *
      * 第一项是形状恢复力（各向异性来源），第二项是体积恢复力（体积守恒来源）。
@@ -49,13 +49,12 @@ public final class MpmMath {
 
         float j = f.det();
 
-        Mat3 invT = new Mat3();
-        invT.set(f).invert().transpose();
-
-        outSigma.set(f).sub(r).scale(2.0F * mu);
-
-        invT.scale(lambda * (j - 1.0F) * j);
-        outSigma.add(invT);
+        Mat3 transpose = new Mat3().set(f).transpose();
+        outSigma.set(f).sub(r).mul(transpose).scale(2.0F * mu);
+        float pressure = lambda * (j - 1) * j;
+        outSigma.m00 += pressure;
+        outSigma.m11 += pressure;
+        outSigma.m22 += pressure;
     }
 
     /**
