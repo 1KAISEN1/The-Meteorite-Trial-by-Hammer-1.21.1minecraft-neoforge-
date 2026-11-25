@@ -86,6 +86,9 @@ public final class HeightFieldBlade {
 
         // 3. 把压掉的体积分给"作用区外"的格子
         //    按距离衰减，越靠近锤击点分得越多——这就是"材料被挤出去"
+        //
+        //    关键是各向异性：锻造是"延展"不是"均匀摊开"，
+        //    材料优先沿 X（刀身方向）流动，Y 方向流动要弱得多。
         float[] add = new float[NX * NY];
         float addSum = 0.0F;
 
@@ -102,8 +105,10 @@ public final class HeightFieldBlade {
                     continue;   // 作用区内不接收
                 }
 
-                // 距离衰减：越远越少，但保证整个平面都有份
-                float w = 1.0F / (1.0F + (d - 1.0F) * (d - 1.0F) * 4.0F);
+                // 各向异性衰减：X 方向衰减慢（流得远），Y 方向衰减快（几乎不流）
+                float dx = cx - sx;
+                float dy = cy - sy;
+                float w = 1.0F / (1.0F + dx * dx * 6.0F + dy * dy * 120.0F);
                 add[ix + iy * NX] = w;
                 addSum += w;
             }

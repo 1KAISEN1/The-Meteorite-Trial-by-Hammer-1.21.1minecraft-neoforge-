@@ -149,6 +149,14 @@ public final class MpmSolver implements SoftBodySolver {
         // Fp = Fe⁻¹ · F
         Mat3 fpNew = new Mat3();
         fpNew.set(fe).invert().mul(f);
+
+        // J2 塑性要求塑性流动等容：det(Fp) ≡ 1。
+        // 不修正的话 Fp 会一路"压缩"，材料只会被压扁，"抽长"结构上不可能出现。
+        float detFp = fpNew.det();
+        if (detFp > 1.0E-6F) {
+            fpNew.scale((float) Math.pow(1.0F / detFp, 1.0 / 3.0));
+        }
+
         storePlasticDeform(blade, i, fpNew);
     }
 

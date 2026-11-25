@@ -96,3 +96,15 @@ tasks.register<JavaExec>("heightFieldSelfTest") {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass.set("com.trialbyhammer.mpmp.HeightFieldSelfTest")
 }
+
+/**
+ * 塑性诊断：单粒子压缩，检查 Fp 是否累积。
+ *
+ * 用法：.\gradlew.bat mpmDiagnostic
+ */
+tasks.register<JavaExec>("mpmDiagnostic") {
+    group = "verification"
+    description = "Check whether plastic deformation accumulates"
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.trialbyhammer.mpm.MpmDiagnostic")
+}

@@ -22,8 +22,8 @@ public final class HeightFieldSelfTest {
 
         // 沿刀身锤一排，横锤（X 长 Y 窄）
         for (int round = 1; round <= 18; round++) {
-            float sx = 0.18F + ((round - 1) % 12) * 0.055F;
-            blade.press(sx, 0.60F, 0.12F, 0.045F, 0.012F);
+            float sx = 0.50F;  // 只锤中心，看材料往哪流
+            blade.press(sx, 0.60F, 0.55F, 0.045F, 0.012F);
         }
 
         System.out.printf("锤后体积: %.4f%n", blade.totalVolume());
@@ -40,7 +40,8 @@ public final class HeightFieldSelfTest {
         for (int iy = 0; iy < HeightFieldBlade.NY; iy++) {
             for (int ix = 0; ix < HeightFieldBlade.NX; ix++) {
                 float v = blade.height(ix, iy);
-                float t = Math.max(0.0F, Math.min(1.0F, v / 0.10F));
+                // 对比度增强：厚度主要在 0.06–0.10 之间变化
+                float t = Math.max(0.0F, Math.min(1.0F, (v - 0.06F) / 0.04F));
 
                 int shade = (int) (255 * t);
                 int color = (shade << 16) | (shade << 8) | shade;
