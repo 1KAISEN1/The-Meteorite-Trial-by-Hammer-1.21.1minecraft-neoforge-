@@ -26,12 +26,38 @@ public record MaterialParams(
         /** Hollomon 硬化指数 n。钢约 0.1–0.25，越大硬化越快。 */
         float hardeningN,
 
+        /**
+         * 韧性：断裂前能承受的塑性应变上限。
+         *
+         * <p>和 {@link #yieldBase}（硬度）一起决定"脆"的程度：
+         * 硬度 ÷ 韧性 = 脆性。低碳钢韧性约 2.0（能锤很多下），
+         * 高碳钢只有 0.3（锤几下就到底）。</p>
+         *
+         * <p>v1 不模拟裂纹，超过这个值只是"不再变形"；
+         * v2 再让它裂开。</p>
+         */
+        float toughness,
+
         /** 导热系数，用于粒子间热传导。 */
         float conductivity,
 
         /** 色调偏移（RGB 打包），用于烧红时叠加材料色。 */
         int tint
 ) {
+
+    /**
+     * 脆性 = 硬度 / 韧性。派生量，不是独立参数。
+     *
+     * <p>高 = 硬而脆（易裂），低 = 软而韧（耐锤）。</p>
+     */
+    public float brittleness() {
+        return yieldBase / Math.max(0.01F, toughness);
+    }
+
+    /** 这个塑性应变是否已经超过韧性上限。 */
+    public boolean isOverworked(float plasticStrain) {
+        return plasticStrain > toughness;
+    }
 
     /** 可锻区间下沿：低于这个温度，金属几乎锤不动。 */
     public float forgeLow() {

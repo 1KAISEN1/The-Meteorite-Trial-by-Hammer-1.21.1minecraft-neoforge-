@@ -57,14 +57,30 @@ public final class MaterialStateTest {
     }
 
     private static void testMaterialTable() {
-        System.out.println("材料表:");
-        String[] names = {"空", "铁", "钢", "铜", "青铜", "天外合金"};
+        System.out.println("材料表（韧性 = 断裂前的塑性应变上限；脆性 = 硬度/韧性）:");
+        String[] names = {"空", "铁", "钢(0.45%C)", "铜", "青铜", "天外合金"};
         for (int id = 1; id <= 5; id++) {
             MaterialParams p = Materials.get(id);
-            System.out.printf("  %-6s Tm=%.0f°C  可锻 %.0f–%.0f°C  屈服 %.3f  K=%.2f n=%.2f%n",
-                    names[id], p.meltingPoint(), p.forgeLow(), p.forgeHigh(),
-                    p.yieldBase(), p.hardeningK(), p.hardeningN());
+            System.out.printf("  %-10s Tm=%.0f°C  屈服 %.3f  韧性 %.2f  脆性 %.3f%n",
+                    names[id], p.meltingPoint(), p.yieldBase(), p.toughness(), p.brittleness());
         }
+
+        // 碳含量扫描：碳越高 → 越硬、越脆、熔点越低
+        System.out.println("  钢的碳含量扫描:");
+        for (float c : new float[]{0.1F, 0.45F, 0.8F, 1.5F}) {
+            MaterialParams p = Materials.steel(c);
+            System.out.printf("    %.2f%%C: 熔点 %.0f°C  屈服 %.3f  韧性 %.2f  脆性 %.3f%n",
+                    c, p.meltingPoint(), p.yieldBase(), p.toughness(), p.brittleness());
+        }
+
+        // 单调性检查
+        MaterialParams low = Materials.steel(0.1F);
+        MaterialParams high = Materials.steel(1.5F);
+
+        check(high.yieldBase() > low.yieldBase(), "碳高应该更硬");
+        check(high.toughness() < low.toughness(), "碳高应该更脆（韧性低）");
+        check(high.meltingPoint() < low.meltingPoint(), "碳高应该熔点更低");
+        check(high.brittleness() > low.brittleness(), "碳高脆性应该更大");
 
         // 铜应该比钢容易烧软
         check(Materials.get(Materials.COPPER).forgeLow()
