@@ -52,11 +52,15 @@ public class ForgeProbeBlockEntity extends BlockEntity {
      * @param dirZ 锤击方向 Z
      */
     public void hammer(float sx, float sy, float dirX, float dirY, float dirZ) {
-        // 0.006 是"一锤给多少速度"的经验值，等实测手感再调
-        // 原型阶段统一用圆头锤；等锤子物品做出来再按玩家手里的锤子切换形状
+        // 位移约束是当前唯一有效的锤击方式：锤面压进去，材料让开。
+        // 实测「press only」和「press+strike」结果完全一致，
+        // 说明下面的 strike 被 press 覆盖了，不产生额外形变。
         blade.press(sx, sy, Math.abs(dirZ) * force * 0.05F, 0.18F, MpmBlade.HammerShape.ROUND);
-        blade.strike(sx, sy, dirX, dirY, dirZ, 0.18F, force * 0.006F,
-                MpmBlade.HammerShape.ROUND);
+
+        // 速度脉冲模型：保留以备切换，当前不生效。
+        // blade.strike(sx, sy, dirX, dirY, dirZ, 0.18F, force * 0.006F,
+        //         MpmBlade.HammerShape.ROUND);
+
         solver.step(blade, DT, SUBSTEPS);
         setChanged();
     }
@@ -82,6 +86,9 @@ public class ForgeProbeBlockEntity extends BlockEntity {
     @Override
     protected void loadAdditional(CompoundTag tag, HolderLookup.Provider registries) {
         super.loadAdditional(tag, registries);
-        // 原型阶段暂不恢复粒子（位置重建逻辑待补）
+        CompoundTag bladeTag = tag.getCompound("blade");
+        if (!bladeTag.isEmpty()) {
+            blade.load(bladeTag);
+        }
     }
 }

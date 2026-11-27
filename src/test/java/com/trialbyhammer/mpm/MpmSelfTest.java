@@ -18,6 +18,7 @@ public final class MpmSelfTest {
 
     private static final float DT = 1.0F / 120.0F;
     private static final int SUBSTEPS = 20;
+    private static final int PASSES = 2, HITS_PER_PASS = 18;
 
     public static void main(String[] args) throws Exception {
         boolean narrow = args.length == 1 && args[0].equals("narrow");
@@ -30,6 +31,12 @@ public final class MpmSelfTest {
         verifyPressAndTurn();
         double initialVolume = enclosedVolume(blade);
         float lastLength = bounds(blade)[0];
+        long totalHitNanos = 0L;
+        long lastHitNanos = 0L;
+        long[] hitTimes = new long[PASSES * HITS_PER_PASS];
+        float worstPlasticVolumeError = 0;
+        Mat3 plastic = new Mat3();
+        int hitCount = 0;
         check(blade.press(-1, -1, 0.05F, 0.04F, MpmBlade.HammerShape.CROSS_PEEN) == 0,
                 "A miss must leave the workpiece alone");
         System.out.println("=== 初始 ===");
@@ -43,8 +50,8 @@ public final class MpmSelfTest {
         renderFrame(blade, dir + "/frames/f" + String.format("%03d", frame) + ".png");
         frame++;
 
-        for (int pass = 0; pass < 2; pass++) {
-            for (int round = 1; round <= 18; round++) {
+        for (int pass = 0; pass < PASSES; pass++) {
+            for (int round = 1; round <= HITS_PER_PASS; round++) {
                 // The sculpting replay works the end while it is still within the block,
                 // then draws out the body. The narrow replay retains the original footprint.
                 float sx;
@@ -58,10 +65,15 @@ public final class MpmSelfTest {
                     sx = 0.18F + (round - 1) * 0.041F;
                 }
                 float sy = pass == 0 ? 0.60F : 0.40F;
+                long hitStart = System.nanoTime();
                 float pushed = blade.press(sx, sy, 0.05F, narrow ? 0.04F : 0.095F,
                         MpmBlade.HammerShape.CROSS_PEEN);
                 check(pushed > 0, "Missed contact on pass " + pass + ", hit " + round);
                 solver.step(blade, DT, SUBSTEPS);
+                long hitNanos = System.nanoTime() - hitStart;
+                totalHitNanos += hitNanos;
+                hitTimes[hitCount++] = hitNanos;
+                lastHitNanos = hitNanos;
 
                 // 逐锤打印：突变会表现为某一锤的数据跳变
                 float[] s = bounds(blade);
@@ -70,6 +82,11 @@ public final class MpmSelfTest {
 
                 check(s[0] > lastLength && s[1] > s[2], "Draw or aspect regression at hit " + round);
                 lastLength = s[0];
+                for (int i = 0; i < MpmBlade.COUNT; i++) {
+                    float error = Math.abs(blade.readPlasticDeform(i, plastic).det() - 1);
+                    worstPlasticVolumeError = Math.max(worstPlasticVolumeError, error);
+                }
+                check(worstPlasticVolumeError < 1e-6F, "Plastic volume drift at hit " + round);
                 double drift = Math.abs(enclosedVolume(blade) / initialVolume - 1);
                 check(drift < 2e-6, "Geometric volume drift " + drift);
                 renderFrame(blade, dir + "/frames/f" + String.format("%03d", frame) + ".png");
@@ -96,7 +113,54 @@ public final class MpmSelfTest {
 
         System.out.printf("  塑性事件: %d 生效, %d 跳过（形变不够）%n",
                 solver.plasticEvents, solver.plasticSkipped);
+
+        // 性能：一锤（press + step）的耗时。决定能不能实时玩。
+        System.out.printf("  每锤耗时: 平均 %.2f ms  最后一次 %.2f ms  （%d 锤）%n",
+                totalHitNanos / 1.0E6 / Math.max(1, hitCount),
+                lastHitNanos / 1.0E6, hitCount);
+
+        // 几何摘要：这些数值以后要喂给属性映射（伤害、攻速、耐久……）
+        if (!narrow) {
+            check(Math.abs(lastLength - 1.065F) < 0.0005F, "Draw length changed: " + lastLength);
+        }
+        java.util.Arrays.sort(hitTimes);
+        int p95 = (int)Math.ceil(hitCount * 0.95) - 1;
+        System.out.printf("  median %.2f ms  p95 %.2f ms  max %.2f ms  peak |Jp-1| %.3e%n",
+                (hitTimes[(hitCount - 1) / 2] + hitTimes[hitCount / 2]) / 2e6,
+                hitTimes[p95] / 1e6, hitTimes[hitCount - 1] / 1e6, worstPlasticVolumeError);
+        System.out.println("  STATE " + stateHash(blade));
+        BladeMetrics metrics = BladeMetrics.compute(blade, 8);
+        System.out.println("  " + metrics.summary());
+        System.out.print("  截面宽度: ");
+        for (float w : metrics.sectionWidths) {
+            System.out.printf("%.3f ", w);
+        }
+        System.out.println();
+        System.out.print("  截面厚度: ");
+        for (float t : metrics.sectionThicknesses) {
+            System.out.printf("%.3f ", t);
+        }
+        System.out.println();
+
         renderViews(blade, dir + "/shaped");
+    }
+
+    /** Fingerprint the unquantized state in material order, outside the hit timer. */
+    private static String stateHash(MpmBlade blade) throws java.security.NoSuchAlgorithmException {
+        var digest = java.security.MessageDigest.getInstance("SHA-256");
+        var bytes = java.nio.ByteBuffer.allocate(128);
+        for (int i = 0; i < MpmBlade.COUNT; i++) {
+            bytes.clear();
+            bytes.putFloat(blade.x(i)).putFloat(blade.y(i)).putFloat(blade.z(i));
+            bytes.putFloat(blade.vx(i)).putFloat(blade.vy(i)).putFloat(blade.vz(i));
+            bytes.putFloat(blade.mass(i)).putFloat(blade.plasticStrain(i)).putFloat(blade.pressure[i]);
+            bytes.put(blade.material(i));
+            for (int k = 0; k < 9; k++) {
+                bytes.putFloat(blade.deform(i, k)).putFloat(blade.plasticDeform(i, k));
+            }
+            digest.update(bytes.array(), 0, bytes.position());
+        }
+        return java.util.HexFormat.of().formatHex(digest.digest());
     }
 
     private static void verifyPressAndTurn() {
@@ -300,7 +364,7 @@ public final class MpmSelfTest {
         System.out.printf("  mean J %.7f  max |Jp-1| %.7f  enclosed %.9f%n",
                 volume / MpmBlade.COUNT, fpError, enclosedVolume(blade));
         check(nanCount == 0 && totalMass == 2.7e8, "Non-finite state or mass loss");
-        check(fError < 5e-5 && fpError < 5e-5, "Invalid local material volume");
+        check(fError < 5e-5 && fpError < 1e-6, "Invalid local material volume");
         check(Math.abs(enclosedVolume(blade) / initialVolume - 1) < 2e-6, "Invalid enclosed volume");
         // 悬空段诊断：X 超过铁砧范围的部分，平均 Z 应该明显低于铁砧面
         double hangZ = 0.0;

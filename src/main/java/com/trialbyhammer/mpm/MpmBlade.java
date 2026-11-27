@@ -438,6 +438,43 @@ public final class MpmBlade {
     }
 
     /**
+     * 从存档恢复粒子。
+     *
+     * <p>只恢复位置和材料，形变矩阵重置为单位阵——塑性历史不存档。
+     * 这是原型阶段的取舍：形状能保住（这是玩家最在意的），
+     * 但"这块钢被锤过多少次"会丢。以后要保留的话，得把 Fp 也序列化。</p>
+     *
+     * @return 是否成功恢复（存档格式不对时返回 false，保留默认形状）
+     */
+    public boolean load(CompoundTag tag) {
+        byte[] pos = tag.getByteArray("pos");
+        byte[] mat = tag.getByteArray("mat");
+
+        if (pos.length != COUNT * 6 || mat.length != COUNT) {
+            return false;
+        }
+
+        for (int i = 0; i < COUNT; i++) {
+            px[i] = unpackShort(pos, i * 6);
+            py[i] = unpackShort(pos, i * 6 + 2);
+            pz[i] = unpackShort(pos, i * 6 + 4);
+            material[i] = mat[i];
+
+            // 速度清零，形变归位
+            vx[i] = 0.0F;
+            vy[i] = 0.0F;
+            vz[i] = 0.0F;
+
+            for (int k = 0; k < 9; k++) {
+                deform[i * 9 + k] = (k % 4 == 0) ? 1.0F : 0.0F;
+                plasticDeform[i * 9 + k] = (k % 4 == 0) ? 1.0F : 0.0F;
+            }
+            plasticStrain[i] = 0.0F;
+        }
+        return true;
+    }
+
+    /**
      * 存档量化范围。
      *
      * <p>锻造会把材料拉出方块边界（抽长时能到 -0.2 或 1.4），

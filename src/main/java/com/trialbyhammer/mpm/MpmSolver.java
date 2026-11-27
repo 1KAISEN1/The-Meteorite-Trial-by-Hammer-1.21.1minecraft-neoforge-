@@ -1,5 +1,8 @@
 package com.trialbyhammer.mpm;
 
+import java.util.Arrays;
+import java.util.stream.IntStream;
+
 /**
  * MPM（物质点法）求解器——应力版。
  *
@@ -97,10 +100,62 @@ public final class MpmSolver implements SoftBodySolver {
     /** 初始体积相对质量的系数。绝对值不重要，整体一致即可。 */
     private static final float VOLUME_PER_MASS = 1.0F;
 
-    private final Mat3 f = new Mat3();
-    private final Mat3 fp = new Mat3();
-    private final Mat3 fe = new Mat3();
-    private final Mat3 sigma = new Mat3();
+    // Fixed partitions keep floating-point reductions independent of CPU count and scheduling.
+    private static final int BLOCKS = 6;
+    private static final class ParticleBlock {
+        final int begin, end;
+        final Mat3 f = new Mat3(), fp = new Mat3(), fe = new Mat3(), sigma = new Mat3();
+        float[] mass = new float[0], vx, vy, vz, fx, fy, fz;
+        int[] nodes;
+        int count, events, skipped;
+        int x0, y0, z0, height, depth;
+
+        ParticleBlock(int id) {
+            begin = MpmBlade.COUNT * id / BLOCKS;
+            end = MpmBlade.COUNT * (id + 1) / BLOCKS;
+        }
+
+        void prepare(MpmBlade blade) {
+            float minX = Float.POSITIVE_INFINITY, maxX = Float.NEGATIVE_INFINITY;
+            float minY = Float.POSITIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY;
+            float minZ = Float.POSITIVE_INFINITY, maxZ = Float.NEGATIVE_INFINITY;
+            for (int i = begin; i < end; i++) {
+                minX = Math.min(minX, blade.x(i)); maxX = Math.max(maxX, blade.x(i));
+                minY = Math.min(minY, blade.y(i)); maxY = Math.max(maxY, blade.y(i));
+                minZ = Math.min(minZ, blade.z(i)); maxZ = Math.max(maxZ, blade.z(i));
+            }
+            x0 = (int)gridCoordinate(minX, NX) - 1;
+            y0 = (int)gridCoordinate(minY, NY) - 1;
+            z0 = (int)gridCoordinate(minZ, NZ) - 1;
+            int width = (int)gridCoordinate(maxX, NX) + 2 - x0;
+            height = (int)gridCoordinate(maxY, NY) + 2 - y0;
+            depth = (int)gridCoordinate(maxZ, NZ) + 2 - z0;
+            reset(width * height * depth);
+        }
+
+        int index(int x, int y, int z) {
+            // Z is contiguous because it is the innermost stencil loop.
+            return ((x - x0) * height + y - y0) * depth + z - z0;
+        }
+
+        void reset(int capacity) {
+            if (capacity > mass.length) {
+                mass = new float[capacity];
+                vx = new float[capacity]; vy = new float[capacity]; vz = new float[capacity];
+                fx = new float[capacity]; fy = new float[capacity]; fz = new float[capacity];
+                nodes = new int[capacity];
+            } else {
+                for (int k = 0; k < count; k++) {
+                    int j = nodes[k];
+                    mass[j] = vx[j] = vy[j] = vz[j] = fx[j] = fy[j] = fz[j] = 0;
+                }
+            }
+            count = events = skipped = 0;
+        }
+    }
+
+    private final ParticleBlock[] blocks = IntStream.range(0, BLOCKS)
+            .mapToObj(ParticleBlock::new).toArray(ParticleBlock[]::new);
 
     /** 诊断用：returnMapping 实际被调用（并生效）的次数。 */
     public int plasticEvents = 0;
@@ -114,12 +169,13 @@ public final class MpmSolver implements SoftBodySolver {
      *
      * <p>没有这一步，金属就是纯弹性——锤完弹回去，永远定不了型。</p>
      */
-    private void returnMapping(MpmBlade blade, int i, Mat3 feMat, float yield) {
+    private void returnMapping(MpmBlade blade, int i, float yield, ParticleBlock block) {
+        Mat3 f = block.f, fe = block.fe;
         Mat3 r = new Mat3();
-        MpmMath.polarDecompose(feMat, r);
+        MpmMath.polarDecompose(fe, r);
 
         Mat3 dev = new Mat3();
-        dev.set(feMat).sub(r);
+        dev.set(fe).sub(r);
 
         float mag = dev.frobenius();
         if (mag < 1.0E-9F) {
@@ -129,11 +185,11 @@ public final class MpmSolver implements SoftBodySolver {
         // 偏差对应的应力是 2μ·dev，缩放到刚好等于屈服强度
         float scale = yield / (2.0F * MU * mag);
         if (scale >= 1.0F) {
-            plasticSkipped++;
+            block.skipped++;
             return;
         }
 
-        plasticEvents++;
+        block.events++;
         blade.addPlasticStrain(i, mag * (1 - scale));
         dev.scale(scale);
         fe.set(r).add(dev);
@@ -159,30 +215,51 @@ public final class MpmSolver implements SoftBodySolver {
         double waveSpeed = Math.sqrt((LAMBDA + 2 * MU) * VOLUME_PER_MASS);
         double maxDt = 0.5 * GRID_SIZE / (Math.max(NX, Math.max(NY, NZ)) * waveSpeed);
         int subdivisions = Math.max(1, (int) Math.ceil(dt / maxDt));
-        dt /= subdivisions;
+        final float stepDt = dt / subdivisions;
         for (int s = 0; s < substeps * subdivisions; s++) {
-            prepareGrid(blade);
-            particleToGrid(blade);
-            gridUpdate(dt);
-            gridToParticle(blade, dt);
-            projectDeform(blade);
+            Arrays.stream(blocks).parallel().forEach(block -> particleToGrid(blade, block));
+            prepareGrid();
+            for (ParticleBlock block : blocks) {
+                merge(block);
+            }
+            gridUpdate(stepDt);
+            Arrays.stream(blocks).parallel().forEach(block -> {
+                gridToParticle(blade, stepDt, block.begin, block.end);
+                projectDeform(blade, block.begin, block.end, block.f);
+            });
         }
         blade.projectVolume();
     }
 
-    private void prepareGrid(MpmBlade blade) {
+    private void merge(ParticleBlock block) {
+        // Merge in fixed material-index order, independent of thread scheduling.
+        for (int k = 0; k < block.count; k++) {
+            int local = block.nodes[k];
+            int row = local / block.depth;
+            int j = index(block.x0 + row / block.height, block.y0 + row % block.height,
+                    block.z0 + local % block.depth);
+            if (gMass[j] == 0) active[activeCount++] = j;
+            gMass[j] += block.mass[local];
+            gvx[j] += block.vx[local]; gvy[j] += block.vy[local]; gvz[j] += block.vz[local];
+            gfx[j] += block.fx[local]; gfy[j] += block.fy[local]; gfz[j] += block.fz[local];
+        }
+        plasticEvents += block.events;
+        plasticSkipped += block.skipped;
+    }
+
+    private void prepareGrid() {
         for (int j = 0; j < activeCount; j++) {
             int i = active[j];
             gMass[i] = gvx[i] = gvy[i] = gvz[i] = gfx[i] = gfy[i] = gfz[i] = 0;
         }
         activeCount = 0;
-        float bottom = Float.POSITIVE_INFINITY, top = Float.NEGATIVE_INFINITY;
-        for (int i = 0; i < MpmBlade.COUNT; i++) {
-            bottom = Math.min(bottom, blade.z(i));
-            top = Math.max(top, blade.z(i));
+        gridZ0 = NZ;
+        int endZ = 0;
+        for (ParticleBlock block : blocks) {
+            gridZ0 = Math.min(gridZ0, block.z0);
+            endZ = Math.max(endZ, block.z0 + block.depth);
         }
-        gridZ0 = (int) gridCoordinate(bottom, NZ) - 1;
-        int layers = (int) gridCoordinate(top, NZ) + 2 - gridZ0;
+        int layers = endZ - gridZ0;
         int capacity = layers * NX * NY;
         if (capacity > gMass.length) {
             int padded = Math.min(NZ, layers + 4) * NX * NY;
@@ -200,12 +277,16 @@ public final class MpmSolver implements SoftBodySolver {
      * gridForce -= V0 · σ · ∇w
      * </pre>
      */
-    private void particleToGrid(MpmBlade blade) {
+    private void particleToGrid(MpmBlade blade, ParticleBlock block) {
+        block.prepare(blade);
+        float[] gMass = block.mass, gvx = block.vx, gvy = block.vy, gvz = block.vz;
+        float[] gfx = block.fx, gfy = block.fy, gfz = block.fz;
+        Mat3 f = block.f, fe = block.fe, fp = block.fp, sigma = block.sigma;
         final float[] wx = new float[3];
         final float[] wy = new float[3];
         final float[] wz = new float[3];
 
-        for (int i = 0; i < MpmBlade.COUNT; i++) {
+        for (int i = block.begin; i < block.end; i++) {
             float x = blade.x(i), y = blade.y(i), z = blade.z(i);
             float m = blade.mass(i);
 
@@ -225,7 +306,7 @@ public final class MpmSolver implements SoftBodySolver {
             sigma.m11 -= mean;
             sigma.m22 -= mean;
             if (sigma.frobenius() > yield) {
-                returnMapping(blade, i, fe, yield);
+                returnMapping(blade, i, yield, block);
                 blade.readPlasticDeform(i, fp);
                 fe.set(f).mul(fp.invert());
                 MpmMath.stress(fe, sigma, MU, LAMBDA);
@@ -260,29 +341,32 @@ public final class MpmSolver implements SoftBodySolver {
 
             for (int ox = -1; ox <= 1; ox++) {
                 int gx = cx + ox;
-                if (gx < 0 || gx >= NX) continue;
+                float xWeight = wx[ox + 1];
+                float xDerivative = (NX / GRID_SIZE) * dw(fx, ox);
 
                 for (int oy = -1; oy <= 1; oy++) {
                     int gy = cy + oy;
-                    if (gy < 0 || gy >= NY) continue;
+                    float xyWeight = xWeight * wy[oy + 1];
+                    float dxWeight = xDerivative * wy[oy + 1];
+                    float dyWeight = xWeight * (NY / GRID_SIZE) * dw(fy, oy);
+                    float dzWeight = xyWeight * (NZ / GRID_SIZE);
 
                     for (int oz = -1; oz <= 1; oz++) {
                         int gz = cz + oz;
-                        if (gz < 0 || gz >= NZ) continue;
 
-                        float w = wx[ox + 1] * wy[oy + 1] * wz[oz + 1];
-                        int idx = index(gx, gy, gz);
+                        float w = xyWeight * wz[oz + 1];
+                        int idx = block.index(gx, gy, gz);
 
                         if (w <= 0) continue;
-                        if (gMass[idx] == 0) active[activeCount++] = idx;
+                        if (gMass[idx] == 0) block.nodes[block.count++] = idx;
                         gMass[idx] += w * m;
                         gvx[idx] += w * m * blade.vx(i);
                         gvy[idx] += w * m * blade.vy(i);
                         gvz[idx] += w * m * blade.vz(i);
 
-                        float gwx = (NX / GRID_SIZE) * dw(fx, ox) * wy[oy + 1] * wz[oz + 1];
-                        float gwy = wx[ox + 1] * (NY / GRID_SIZE) * dw(fy, oy) * wz[oz + 1];
-                        float gwz = wx[ox + 1] * wy[oy + 1] * (NZ / GRID_SIZE) * dw(fz, oz);
+                        float gwx = dxWeight * wz[oz + 1];
+                        float gwy = dyWeight * wz[oz + 1];
+                        float gwz = dzWeight * dw(fz, oz);
 
                         // σ · ∇w（行主序）
                         float sx = sigma.m00 * gwx + sigma.m01 * gwy + sigma.m02 * gwz;
@@ -319,12 +403,12 @@ public final class MpmSolver implements SoftBodySolver {
     }
 
     /** 网格 → 粒子：更新速度与形变矩阵。 */
-    private void gridToParticle(MpmBlade blade, float dt) {
+    private void gridToParticle(MpmBlade blade, float dt, int begin, int end) {
         final float[] wx = new float[3];
         final float[] wy = new float[3];
         final float[] wz = new float[3];
 
-        for (int i = 0; i < MpmBlade.COUNT; i++) {
+        for (int i = begin; i < end; i++) {
             float x = blade.x(i), y = blade.y(i), z = blade.z(i);
 
             float gxf = gridCoordinate(x, NX);
@@ -352,27 +436,30 @@ public final class MpmSolver implements SoftBodySolver {
 
             for (int ox = -1; ox <= 1; ox++) {
                 int gx = cx + ox;
-                if (gx < 0 || gx >= NX) continue;
+                float xWeight = wx[ox + 1];
+                float xDerivative = (NX / GRID_SIZE) * dw(fx, ox);
 
                 for (int oy = -1; oy <= 1; oy++) {
                     int gy = cy + oy;
-                    if (gy < 0 || gy >= NY) continue;
+                    float xyWeight = xWeight * wy[oy + 1];
+                    float dxWeight = xDerivative * wy[oy + 1];
+                    float dyWeight = xWeight * (NY / GRID_SIZE) * dw(fy, oy);
+                    float dzWeight = xyWeight * (NZ / GRID_SIZE);
 
                     for (int oz = -1; oz <= 1; oz++) {
                         int gz = cz + oz;
-                        if (gz < 0 || gz >= NZ) continue;
 
                         int idx = index(gx, gy, gz);
                         if (gMass[idx] <= 1.0E-9F) continue;
 
-                        float w = wx[ox + 1] * wy[oy + 1] * wz[oz + 1];
+                        float w = xyWeight * wz[oz + 1];
                         nvx += w * gvx[idx];
                         nvy += w * gvy[idx];
                         nvz += w * gvz[idx];
 
-                        float dx = (NX / GRID_SIZE) * dw(fx, ox) * wy[oy + 1] * wz[oz + 1];
-                        float dy = wx[ox + 1] * (NY / GRID_SIZE) * dw(fy, oy) * wz[oz + 1];
-                        float dz = wx[ox + 1] * wy[oy + 1] * (NZ / GRID_SIZE) * dw(fz, oz);
+                        float dx = dxWeight * wz[oz + 1];
+                        float dy = dyWeight * wz[oz + 1];
+                        float dz = dzWeight * dw(fz, oz);
 
                         g00 += dx * gvx[idx]; g01 += dy * gvx[idx]; g02 += dz * gvx[idx];
                         g10 += dx * gvy[idx]; g11 += dy * gvy[idx]; g12 += dz * gvy[idx];
@@ -449,12 +536,12 @@ public final class MpmSolver implements SoftBodySolver {
 
     /** Accumulate the volumetric stress before projecting F to unit determinant.
      * This retains the contact pressure that supports the weight of upper layers. */
-    private void projectDeform(MpmBlade blade) {
-        for (int i = 0; i < MpmBlade.COUNT; i++) {
+    private void projectDeform(MpmBlade blade, int begin, int end, Mat3 f) {
+        for (int i = begin; i < end; i++) {
             blade.readDeform(i, f);
             float jacobian = f.det();
             if (!(jacobian > 0) || !Float.isFinite(jacobian)) {
-                throw new ArithmeticException("Invalid material Jacobian at particle " + i);
+                throw new ArithmeticException("Invalid material Jacobian " + jacobian + " at particle " + i);
             }
             blade.pressure[i] += (LAMBDA + blade.pressure[i]) * (jacobian - 1);
             f.scale((float)(1 / Math.cbrt(jacobian)));
