@@ -148,6 +148,10 @@ public final class MpmSolver implements SoftBodySolver {
         }
     }
 
+    // Cache only sub-yield elastic stress. Pressure is accumulated separately.
+    private final float[] elasticStress = new float[MpmBlade.COUNT * 9];
+    private final boolean[] belowYield = new boolean[MpmBlade.COUNT];
+
     private final ParticleBlock[] blocks = IntStream.range(0, BLOCKS)
             .mapToObj(ParticleBlock::new).toArray(ParticleBlock[]::new);
 
@@ -211,7 +215,9 @@ public final class MpmSolver implements SoftBodySolver {
         int subdivisions = Math.max(1, (int) Math.ceil(dt / maxDt));
         final float stepDt = dt / subdivisions;
         for (int s = 0; s < substeps * subdivisions; s++) {
-            Arrays.stream(blocks).parallel().forEach(block -> particleToGrid(blade, block));
+            // Refresh on every external action and at least every fourth internal step.
+            boolean reuseStress = (s & 3) != 0;
+            Arrays.stream(blocks).parallel().forEach(block -> particleToGrid(blade, block, reuseStress));
             prepareGrid();
             for (ParticleBlock block : blocks) {
                 merge(block);
@@ -229,10 +235,19 @@ public final class MpmSolver implements SoftBodySolver {
      * source is the furnace temperature in Celsius; use 20 for air cooling. */
     public boolean thermalStep(MpmBlade blade, float seconds, float source) {
         if (!(seconds > 0) || !Float.isFinite(seconds) || !Float.isFinite(source)) return false;
-        if (source == 20) {
-            int i = 0;
-            while (i < MpmBlade.COUNT && blade.temperature(i) == 20) i++;
-            if (i == MpmBlade.COUNT) return false;
+        float environment = (float)-Math.expm1(-seconds * (source > 20 ? .8 : .004));
+        float first = blade.temperature(0);
+        int iSame = 1;
+        while (iSame < MpmBlade.COUNT && blade.temperature(iSame) == first) iSame++;
+        if (iSame == MpmBlade.COUNT) {
+            if (source == 20 && first == 20) return false;
+            // A uniform field has zero conductive flux; heating and annealing still advance.
+            float updated = first + environment * (source - first);
+            for (int i = 0; i < MpmBlade.COUNT; i++) {
+                blade.setTemperature(i, updated);
+                blade.recover(i, seconds);
+            }
+            return true;
         }
         int lo = NZ, hi = 0;
         for (int i = 0; i < MpmBlade.COUNT; i++) {
@@ -241,7 +256,6 @@ public final class MpmSolver implements SoftBodySolver {
             hi = Math.max(hi, z + 2);
         }
         prepareGrid(lo, hi);
-        float environment = (float)-Math.expm1(-seconds * (source > 20 ? .8 : .004));
         for (int pass = 0; pass < 2; pass++) {
             for (int i = 0; i < MpmBlade.COUNT; i++) {
                 float x = gridCoordinate(blade.x(i), NX) - .5F;
@@ -324,11 +338,11 @@ public final class MpmSolver implements SoftBodySolver {
      * gridForce -= V0 · σ · ∇w
      * </pre>
      */
-    private void particleToGrid(MpmBlade blade, ParticleBlock block) {
+    private void particleToGrid(MpmBlade blade, ParticleBlock block, boolean reuseStress) {
         block.prepare(blade);
         float[] gMass = block.mass, gvx = block.vx, gvy = block.vy, gvz = block.vz;
         float[] gfx = block.fx, gfy = block.fy, gfz = block.fz;
-        Mat3 f = block.f, fe = block.fe, fp = block.fp, sigma = block.sigma;
+        Mat3 sigma = block.sigma;
         final float[] wx = new float[3];
         final float[] wy = new float[3];
         final float[] wz = new float[3];
@@ -337,30 +351,12 @@ public final class MpmSolver implements SoftBodySolver {
             float x = blade.x(i), y = blade.y(i), z = blade.z(i);
             float m = blade.mass(i);
 
-            // 弹性形变 Fe = F · Fp⁻¹。应力只由弹性部分产生，
-            // 塑性部分永久保留、不回弹——这是"锤完定型"的关键。
-            blade.readDeform(i, f);
-            blade.readPlasticDeform(i, fp);
-            fp.invert();          // fp 现在是 Fp⁻¹
-            fe.set(f).mul(fp);            // Fe = F · Fp⁻¹
-
-            MpmMath.stress(fe, sigma, MU, LAMBDA);
-
-            // 冷作硬化
-            float yield = blade.yieldStrength(i);
-            float mean = (sigma.m00 + sigma.m11 + sigma.m22) / 3;
-            sigma.m00 -= mean;
-            sigma.m11 -= mean;
-            sigma.m22 -= mean;
-            if (sigma.frobenius() > yield) {
-                returnMapping(blade, i, yield, block);
-                blade.readPlasticDeform(i, fp);
-                fe.set(f).mul(fp.invert());
-                MpmMath.stress(fe, sigma, MU, LAMBDA);
+            float vx = blade.vx(i), vy = blade.vy(i), vz = blade.vz(i);
+            if (reuseStress && belowYield[i] && vx*vx + vy*vy + vz*vz < 1e-4F) {
+                sigma.read(elasticStress, 9 * i);
             } else {
-                sigma.m00 += mean;
-                sigma.m11 += mean;
-                sigma.m22 += mean;
+                updateElasticStress(blade, block, i);
+                sigma.write(elasticStress, 9 * i);
             }
 
             sigma.m00 += blade.pressure[i];
@@ -429,6 +425,37 @@ public final class MpmSolver implements SoftBodySolver {
         }
     }
 
+    private void updateElasticStress(MpmBlade blade, ParticleBlock block, int i) {
+        Mat3 f = block.f, fp = block.fp, fe = block.fe, sigma = block.sigma;
+        // 弹性形变 Fe = F · Fp⁻¹。应力只由弹性部分产生，
+        // 塑性部分永久保留、不回弹——这是"锤完定型"的关键。
+        blade.readDeform(i, f);
+        blade.readPlasticDeform(i, fp);
+        fp.invert();          // fp 现在是 Fp⁻¹
+        fe.set(f).mul(fp);            // Fe = F · Fp⁻¹
+
+        MpmMath.stress(fe, sigma, MU, LAMBDA);
+
+        // 冷作硬化
+        float yield = blade.yieldStrength(i);
+        float mean = (sigma.m00 + sigma.m11 + sigma.m22) / 3;
+        sigma.m00 -= mean;
+        sigma.m11 -= mean;
+        sigma.m22 -= mean;
+        if (sigma.frobenius() > yield) {
+            belowYield[i] = false;
+            returnMapping(blade, i, yield, block);
+            blade.readPlasticDeform(i, fp);
+            fe.set(f).mul(fp.invert());
+            MpmMath.stress(fe, sigma, MU, LAMBDA);
+        } else {
+            belowYield[i] = true;
+            sigma.m00 += mean;
+            sigma.m11 += mean;
+            sigma.m22 += mean;
+        }
+    }
+
     /** 网格更新：动量折成速度，再叠加上应力产生的加速度。 */
     private void gridUpdate(float dt) {
         for (int j = 0; j < activeCount; j++) {
@@ -457,6 +484,13 @@ public final class MpmSolver implements SoftBodySolver {
 
         for (int i = begin; i < end; i++) {
             float x = blade.x(i), y = blade.y(i), z = blade.z(i);
+
+            // 钳子：靠手柄那一端被夹死，不能动。
+            // 没有夹持，锤击会把整块材料推着走，形状守不住。
+            if (x < CLAMP_X) {
+                blade.setVelocity(i, 0.0F, 0.0F, 0.0F);
+                continue;
+            }
 
             float gxf = gridCoordinate(x, NX);
             float gyf = gridCoordinate(y, NY);
@@ -519,12 +553,7 @@ public final class MpmSolver implements SoftBodySolver {
             nvy = clampSpeed(nvy * DAMPING);
             nvz = clampSpeed(nvz * DAMPING);
 
-            // 钳子：靠手柄那一端被夹死，不能动。
-            // 没有夹持，锤击会把整块材料推着走，形状守不住。
-            if (x < CLAMP_X) {
-                blade.setVelocity(i, 0.0F, 0.0F, 0.0F);
-                continue;
-            }
+
 
 
             blade.setVelocity(i, nvx, nvy, nvz);
