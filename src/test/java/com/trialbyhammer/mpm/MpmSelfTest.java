@@ -25,10 +25,11 @@ public final class MpmSelfTest {
         String dir = narrow ? "build/mpm/narrow" : "build/mpm";
         new File(dir).mkdirs();
 
-        MpmBlade blade = new MpmBlade();
+        MpmBlade blade = new MpmBlade(Materials.STEEL, 1000);
         MpmSolver solver = new MpmSolver();
 
         verifyPressAndTurn();
+        thermalChecks();
         double initialVolume = enclosedVolume(blade);
         float lastLength = bounds(blade)[0];
         long totalHitNanos = 0L;
@@ -65,6 +66,7 @@ public final class MpmSelfTest {
                     sx = 0.18F + (round - 1) * 0.041F;
                 }
                 float sy = pass == 0 ? 0.60F : 0.40F;
+                solver.thermalStep(blade, DT * SUBSTEPS, 1000);
                 long hitStart = System.nanoTime();
                 float pushed = blade.press(sx, sy, 0.05F, narrow ? 0.04F : 0.095F,
                         MpmBlade.HammerShape.CROSS_PEEN);
@@ -149,8 +151,11 @@ public final class MpmSelfTest {
     private static String stateHash(MpmBlade blade) throws java.security.NoSuchAlgorithmException {
         var digest = java.security.MessageDigest.getInstance("SHA-256");
         var bytes = java.nio.ByteBuffer.allocate(128);
+        bytes.putInt(blade.materialId()).putInt(blade.folds()).putFloat(blade.carbonContent());
+        digest.update(bytes.array(), 0, bytes.position());
         for (int i = 0; i < MpmBlade.COUNT; i++) {
             bytes.clear();
+            bytes.putFloat(blade.temperature(i));
             bytes.putFloat(blade.x(i)).putFloat(blade.y(i)).putFloat(blade.z(i));
             bytes.putFloat(blade.vx(i)).putFloat(blade.vy(i)).putFloat(blade.vz(i));
             bytes.putFloat(blade.mass(i)).putFloat(blade.plasticStrain(i)).putFloat(blade.pressure[i]);
@@ -163,9 +168,61 @@ public final class MpmSelfTest {
         return java.util.HexFormat.of().formatHex(digest.digest());
     }
 
+    private static void thermalChecks() {
+        MpmBlade cold = new MpmBlade(Materials.STEEL,20);
+        MpmSolver solver = new MpmSolver();
+        float initial = bounds(cold)[0];
+        for (int pass = 0; pass < 2; pass++) {
+            for (int n = 1; n <= 18; n++) {
+                float x = pass == 1 ? .18F + (n-1)*.041F : n <= 4 ? .896F+(n-1)*.004F : .18F+(n-5)*.048F;
+                solver.thermalStep(cold, DT*SUBSTEPS, 20);
+                cold.press(x, pass == 0 ? .6F : .4F, .05F, .095F, MpmBlade.HammerShape.CROSS_PEEN);
+                solver.step(cold, DT, SUBSTEPS);
+            }
+            if (pass == 0) cold.turnOver();
+        }
+        float growth = bounds(cold)[0] - initial;
+        System.out.printf("cold X %.6f growth %.6f%n", bounds(cold)[0], growth);
+        check(Math.abs(growth) < .008, "Cold billet flowed");
+        MpmBlade sample = new MpmBlade(Materials.STEEL, 1000);
+        float firstGain = 0, previousGain = Float.POSITIVE_INFINITY;
+        for (int hit = 1; hit <= 31; hit++) {
+            float before = bounds(sample)[0];
+            sample.press(.5F,.5F,.05F,.12F,MpmBlade.HammerShape.CROSS_PEEN);
+            float gain = bounds(sample)[0]-before;
+            if (hit == 1) firstGain = gain;
+            if (hit == 31) check(gain < previousGain && gain < firstGain / 2, "Hardening response");
+            previousGain = gain;
+            if (hit == 1 || hit % 10 == 0 || hit == 31) System.out.printf("hardening hit %d dx %.7f%n",hit,gain);
+        }
+        int i = MpmBlade.COUNT / 2;
+        sample.addPlasticStrain(i, 1);
+        sample.fold(); sample.fold(); sample.setCarbonContent(.4F);
+        MpmBlade restored = new MpmBlade();
+        check(restored.load(sample.save(null)) && restored.temperature(i)==sample.temperature(i)
+                && restored.plasticStrain(i)==sample.plasticStrain(i) && restored.layers()==4
+                && restored.carbonContent()==.4F, "Forge state round trip");
+        solver.thermalStep(sample, 10, 1200);
+        check(sample.plasticStrain(i)==0 && sample.temperature(i)>1000, "Annealing");
+        restored.remelt();
+        check(restored.folds()==0, "Remelt");
+        sample.setTemperature(i,300);
+        solver.thermalStep(sample,.1F,20);
+        check(sample.temperature(i)>300 && sample.temperature(i+1)<1200, "Thermal exchange");
+        for (int id=1; id<=5; id++) {
+            int previous=0;
+            for (int t=20;t<=1200;t++) {
+                int rgb=Materials.get(id).color(t);
+                int light=54*(rgb>>16)+183*((rgb>>8)&255)+19*(rgb&255);
+                check(light>=previous,"Nonmonotonic brightness");
+                previous=light;
+            }
+        }
+    }
+
     private static void verifyPressAndTurn() {
         for (MpmBlade.HammerShape face : MpmBlade.HammerShape.values()) {
-            MpmBlade sample = new MpmBlade();
+            MpmBlade sample = new MpmBlade(Materials.STEEL, 1000);
             double volume = enclosedVolume(sample);
             check(sample.press(0.50F, 0.57F, 0.05F, 0.08F, face) > 0, "No contact for " + face);
             float[] flat = bounds(sample);

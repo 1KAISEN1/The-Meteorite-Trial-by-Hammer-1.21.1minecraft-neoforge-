@@ -52,12 +52,6 @@ public final class MpmSolver implements SoftBodySolver {
     /** 体积模量：越大越不可压缩。 */
     static final float LAMBDA = 50.0F;
 
-    /** 基础屈服强度。应力超过它就开始塑性流动。 */
-    private static final float YIELD_BASE = 0.12F;
-
-    /** 硬化系数：累积塑性应变越高，屈服强度越高。 */
-    private static final float HARDENING = 3.0F;
-
     /** 速度上限。 */
     private static final float MAX_SPEED = 1.2F;
 
@@ -231,6 +225,55 @@ public final class MpmSolver implements SoftBodySolver {
         blade.projectVolume();
     }
 
+    /** Thermal PIC exchange. Both passes use the same mass/conductivity weights.
+     * source is the furnace temperature in Celsius; use 20 for air cooling. */
+    public boolean thermalStep(MpmBlade blade, float seconds, float source) {
+        if (!(seconds > 0) || !Float.isFinite(seconds) || !Float.isFinite(source)) return false;
+        if (source == 20) {
+            int i = 0;
+            while (i < MpmBlade.COUNT && blade.temperature(i) == 20) i++;
+            if (i == MpmBlade.COUNT) return false;
+        }
+        int lo = NZ, hi = 0;
+        for (int i = 0; i < MpmBlade.COUNT; i++) {
+            int z = (int)(gridCoordinate(blade.z(i), NZ) - .5F);
+            lo = Math.min(lo, z);
+            hi = Math.max(hi, z + 2);
+        }
+        prepareGrid(lo, hi);
+        float environment = (float)-Math.expm1(-seconds * (source > 20 ? .8 : .004));
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < MpmBlade.COUNT; i++) {
+                float x = gridCoordinate(blade.x(i), NX) - .5F;
+                float y = gridCoordinate(blade.y(i), NY) - .5F;
+                float z = gridCoordinate(blade.z(i), NZ) - .5F;
+                int ix = (int)x, iy = (int)y, iz = (int)z;
+                x -= ix; y -= iy; z -= iz;
+                float mix = Math.min(1, seconds * Materials.get(blade.material(i)).conductivity());
+                float temp = blade.temperature(i), change = 0;
+                for (int dx = 0; dx < 2; dx++) for (int dy = 0; dy < 2; dy++) for (int dz = 0; dz < 2; dz++) {
+                    float w = (dx == 0 ? 1-x : x)*(dy == 0 ? 1-y : y)*(dz == 0 ? 1-z : z);
+                    if (w == 0) continue;
+                    int node = index(ix+dx, iy+dy, iz+dz);
+                    if (pass == 0) {
+                        if (gMass[node] == 0) active[activeCount++] = node;
+                        float weight = blade.mass(i) * mix * w;
+                        gMass[node] += weight;
+                        gvx[node] += weight * temp;
+                    } else {
+                        change += w * (gvx[node] / gMass[node] - temp);
+                    }
+                }
+                if (pass == 1) {
+                    temp += mix * change;
+                    blade.setTemperature(i, temp + environment * (source - temp));
+                    blade.recover(i, seconds);
+                }
+            }
+        }
+        return true;
+    }
+
     private void merge(ParticleBlock block) {
         // Merge in fixed material-index order, independent of thread scheduling.
         for (int k = 0; k < block.count; k++) {
@@ -248,17 +291,21 @@ public final class MpmSolver implements SoftBodySolver {
     }
 
     private void prepareGrid() {
+        int startZ = NZ, endZ = 0;
+        for (ParticleBlock block : blocks) {
+            startZ = Math.min(startZ, block.z0);
+            endZ = Math.max(endZ, block.z0 + block.depth);
+        }
+        prepareGrid(startZ, endZ);
+    }
+
+    private void prepareGrid(int startZ, int endZ) {
         for (int j = 0; j < activeCount; j++) {
             int i = active[j];
             gMass[i] = gvx[i] = gvy[i] = gvz[i] = gfx[i] = gfy[i] = gfz[i] = 0;
         }
         activeCount = 0;
-        gridZ0 = NZ;
-        int endZ = 0;
-        for (ParticleBlock block : blocks) {
-            gridZ0 = Math.min(gridZ0, block.z0);
-            endZ = Math.max(endZ, block.z0 + block.depth);
-        }
+        gridZ0 = startZ;
         int layers = endZ - gridZ0;
         int capacity = layers * NX * NY;
         if (capacity > gMass.length) {
@@ -300,7 +347,7 @@ public final class MpmSolver implements SoftBodySolver {
             MpmMath.stress(fe, sigma, MU, LAMBDA);
 
             // 冷作硬化
-            float yield = YIELD_BASE * (1.0F + HARDENING * blade.plasticStrain(i));
+            float yield = blade.yieldStrength(i);
             float mean = (sigma.m00 + sigma.m11 + sigma.m22) / 3;
             sigma.m00 -= mean;
             sigma.m11 -= mean;

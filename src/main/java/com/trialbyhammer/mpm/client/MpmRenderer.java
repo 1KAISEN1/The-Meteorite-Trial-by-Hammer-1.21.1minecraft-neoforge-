@@ -85,10 +85,10 @@ public class MpmRenderer implements BlockEntityRenderer<ForgeProbeBlockEntity> {
             float s = PARTICLE_SIZE;
 
             // 按高度上色：越靠下越暗，帮助看清形变
-            float shade = 0.45F + 0.55F * Math.min(1.0F, z * 2.0F);
-            float r = shade;
-            float g = shade * 0.45F;
-            float b = shade * 0.12F;
+            int color = com.trialbyhammer.mpm.Materials.get(blade.material(i)).color(blade.temperature(i));
+            float r = (color >> 16 & 255) / 255F;
+            float g = (color >> 8 & 255) / 255F;
+            float b = (color & 255) / 255F;
             float a = 1.0F;
 
             float x0 = x - rx * s - ux * s, y0 = y - ry * s - uy * s, z0 = z - rz * s - uz * s;

@@ -55,6 +55,12 @@ dependencies {
     compileOnly(files("libs/Registrate-MC1.21-1.3.0+67.jar"))
 }
 
+// The forging-state round-trip test exercises Minecraft's real NBT codec.
+sourceSets.test {
+    compileClasspath += sourceSets.main.get().compileClasspath
+    runtimeClasspath += sourceSets.main.get().runtimeClasspath
+}
+
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     // 打开所有 lint，早期把警告当敌人，省得后期还债。

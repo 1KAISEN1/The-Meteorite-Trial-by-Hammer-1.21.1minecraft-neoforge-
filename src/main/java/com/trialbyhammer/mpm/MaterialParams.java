@@ -76,18 +76,10 @@ public record MaterialParams(
      * 接近熔点时降到最低但不为 0——为 0 会让求解器失去约束。</p>
      */
     public float temperatureScale(float celsius) {
-        float t = celsius / Math.max(1.0F, meltingPoint);
-        if (t < 0.60F) {
-            // 冷态：极难变形
-            return 8.0F;
-        }
-        if (t > 0.95F) {
-            // 接近熔点：最软，但保留一点约束
-            return 0.08F;
-        }
-        // 可锻区间：从 2.0 平滑降到 0.12
-        float u = (t - 0.60F) / 0.35F;
-        return 2.0F - u * 1.88F;
+        float ratio = celsius / meltingPoint;
+        if (ratio < .6F) return 100000;
+        double u = Math.clamp((ratio - .6) / .35, 0, 1);
+        return (float)(.08 + 10 * Math.pow(1-u, 12));
     }
 
     /**
@@ -97,9 +89,9 @@ public record MaterialParams(
      */
     public float hardenedYield(float plasticStrain) {
         if (plasticStrain <= 0.0F) {
-            return yieldBase;
+            return 0;
         }
-        return yieldBase + hardeningK * (float) Math.pow(plasticStrain, hardeningN);
+        return hardeningK * (float) Math.pow(plasticStrain, hardeningN);
     }
 
     /** 综合屈服：温度软化和冷作硬化两者取较大值。 */
@@ -107,5 +99,21 @@ public record MaterialParams(
         return Math.max(
                 temperatureScale(celsius) * yieldBase,
                 hardenedYield(plasticStrain));
+    }
+    private static final int[] DEGREES = {20, 500, 800, 1000, 1200};
+    private static final int[] RGB = {0x171717, 0x821818, 0xff831b, 0xffe352, 0xffffff};
+
+    public int color(float temperature) {
+        int k = 1;
+        while (k < DEGREES.length - 1 && temperature > DEGREES[k]) k++;
+        float u = Math.clamp((temperature-DEGREES[k-1]) / (DEGREES[k]-DEGREES[k-1]), 0, 1);
+        int rgb = 0;
+        for (int shift = 0; shift <= 16; shift += 8) {
+            int a = RGB[k-1] >> shift & 255, b = RGB[k] >> shift & 255;
+            float tintStrength = .35F * Math.clamp((1200-temperature)/1180, 0, 1);
+            float tintScale = 1 - tintStrength * (1 - ((tint >> shift) & 255)/255F);
+            rgb |= Math.round((a + u*(b-a))*tintScale) << shift;
+        }
+        return rgb;
     }
 }

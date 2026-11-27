@@ -42,6 +42,13 @@ public class ForgeProbeBlock extends BaseEntityBlock {
         return new ForgeProbeBlockEntity(pos, state);
     }
 
+    @Override
+    public <T extends BlockEntity> net.minecraft.world.level.block.entity.BlockEntityTicker<T> getTicker(
+            Level level, BlockState state, net.minecraft.world.level.block.entity.BlockEntityType<T> type) {
+        return createTickerHelper(type, com.trialbyhammer.registry.ModBlockEntities.FORGE_PROBE.get(),
+                (world, pos, block, probe) -> probe.thermalTick(world, pos));
+    }
+
     /**
      * 方块本体不可见，全部交给 {@link com.trialbyhammer.probe.client.ForgeProbeRenderer}
      * 渲染。这样我们就完全控制了几何，不会被原版方块模型限制住。

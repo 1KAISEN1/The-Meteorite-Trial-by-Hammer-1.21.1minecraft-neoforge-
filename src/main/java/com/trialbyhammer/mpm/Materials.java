@@ -110,6 +110,8 @@ public final class Materials {
     }
 
     /** 取材料参数；越界返回铁的参数，避免空指针。 */
+    public static boolean valid(int id) { return id > EMPTY && id < TABLE.length; }
+
     public static MaterialParams get(int id) {
         if (id < 0 || id >= TABLE.length || TABLE[id] == null) {
             return TABLE[IRON];

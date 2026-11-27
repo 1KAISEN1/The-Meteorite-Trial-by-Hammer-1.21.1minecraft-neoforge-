@@ -82,7 +82,14 @@ public final class MpmBlade {
     final float[] pressure = new float[COUNT];
     private final double initialVolume;
 
-    public MpmBlade() {
+    private int materialId;
+
+    public MpmBlade() { this(Materials.IRON, 20); }
+
+    public MpmBlade(int id, float celsius) {
+        if (!Materials.valid(id) || !Float.isFinite(celsius)) throw new IllegalArgumentException();
+        materialId = id;
+        java.util.Arrays.fill(temperature, celsius);
         initBlock();
         initialVolume = MaterialVolume.measure(this);
     }
@@ -124,7 +131,7 @@ public final class MpmBlade {
                             + (hash01(i, 3) - 0.5F) * cellZ * jitter;
 
                     mass[i] = perParticle;
-                    material[i] = 1;
+                    material[i] = (byte)materialId;
 
                     // 单位矩阵：初始没有形变
                     deform[i * 9] = 1.0F;
@@ -186,10 +193,14 @@ public final class MpmBlade {
     public float press(float sx, float sy, float depth, float radius, HammerShape shape) {
         if (!(depth > 0 && radius > 0)) return 0;
         float rx = radius * shape.scaleX, ry = radius * shape.scaleY;
+        double mobility = 0;
+        int contacts = 0;
         float bottom = Float.POSITIVE_INFINITY, top = Float.NEGATIVE_INFINITY;
         for (int i = 0; i < COUNT; i++) {
             float u = (px[i] - sx) / rx, v = (py[i] - sy) / ry;
             if (Math.abs(u) < 1 && Math.abs(v) < 1) {
+                mobility += Math.min(1, .18F / yieldStrength(i));
+                contacts++;
                 bottom = Math.min(bottom, pz[i]);
                 top = Math.max(top, pz[i]);
             }
@@ -197,7 +208,7 @@ public final class MpmBlade {
         if (!(top > bottom)) return 0;
 
         // Limit a single stroke relative to the remaining local thickness.
-        float fraction = Math.min(0.18F, depth / (top - bottom));
+        float fraction = Math.min(0.18F, depth / (top - bottom)) * (float)(mobility / contacts);
         float stretch = 1 / (1 - fraction);
         float xStretch = shape == HammerShape.CROSS_PEEN ? stretch : (float) Math.sqrt(stretch);
         float pushed = drawStrip(px, py, sx, sy, rx, ry, bottom, xStretch - 1, false);
@@ -454,7 +465,28 @@ public final class MpmBlade {
     public float carbonContent() { return carbonContent; }
 
     public void setCarbonContent(float value) {
-        carbonContent = Math.max(0.0F, Math.min(1.0F, value));
+        carbonContent = materialId == Materials.STEEL && Float.isFinite(value) ? Math.clamp(value,0,1) : 0;
+    }
+
+    private final float[] cachedYield = new float[COUNT], yieldTemp = new float[COUNT], yieldStrain = new float[COUNT];
+    private final byte[] yieldMaterial = new byte[COUNT];
+
+    public float yieldStrength(int i) {
+        if (yieldMaterial[i] != material[i] || yieldTemp[i] != temperature[i] || yieldStrain[i] != plasticStrain[i]) {
+            yieldMaterial[i] = material[i];
+            yieldTemp[i] = temperature[i];
+            yieldStrain[i] = plasticStrain[i];
+            cachedYield[i] = Materials.get(material[i]).effectiveYield(temperature[i], plasticStrain[i]);
+        }
+        return cachedYield[i];
+    }
+    public int materialId() { return materialId; }
+    public int layers() { return 1 << folds; }
+    public void fold() { setFolds(folds + 1); }
+    public void remelt() { folds = 0; anneal(); }
+    void recover(int i, float dt) {
+        float excess = temperature[i] - Materials.get(material[i]).recrystallize();
+        if (excess > 0) plasticStrain[i] = Math.max(0, plasticStrain[i] - dt * excess * .025F);
     }
 
     public byte material(int i) { return material[i]; }
@@ -476,18 +508,10 @@ public final class MpmBlade {
         tag.putByteArray("ep", packPlasticStrain());
         tag.putInt("folds", folds);
         tag.putFloat("carbon", carbonContent);
+        tag.putInt("materialId",materialId);
         return tag;
     }
 
-    /**
-     * 从存档恢复粒子。
-     *
-     * <p>只恢复位置和材料，形变矩阵重置为单位阵——塑性历史不存档。
-     * 这是原型阶段的取舍：形状能保住（这是玩家最在意的），
-     * 但"这块钢被锤过多少次"会丢。以后要保留的话，得把 Fp 也序列化。</p>
-     *
-     * @return 是否成功恢复（存档格式不对时返回 false，保留默认形状）
-     */
     public boolean load(CompoundTag tag) {
         byte[] pos = tag.getByteArray("pos");
         byte[] mat = tag.getByteArray("mat");
@@ -496,11 +520,13 @@ public final class MpmBlade {
             return false;
         }
 
+        materialId = tag.contains("materialId") ? tag.getInt("materialId") : mat[0];
+        if (!Materials.valid(materialId)) materialId = Materials.STEEL;
         for (int i = 0; i < COUNT; i++) {
             px[i] = unpackShort(pos, i * 6);
             py[i] = unpackShort(pos, i * 6 + 2);
             pz[i] = unpackShort(pos, i * 6 + 4);
-            material[i] = mat[i];
+            material[i] = Materials.valid(mat[i]) ? mat[i] : (byte)materialId;
 
             // 速度清零，形变归位
             vx[i] = 0.0F;
@@ -511,7 +537,8 @@ public final class MpmBlade {
                 deform[i * 9 + k] = (k % 4 == 0) ? 1.0F : 0.0F;
                 plasticDeform[i * 9 + k] = (k % 4 == 0) ? 1.0F : 0.0F;
             }
-            plasticStrain[i] = 0.0F;
+            plasticStrain[i] = 0;
+            pressure[i] = 0;
             temperature[i] = AMBIENT_C;
         }
 
@@ -528,8 +555,8 @@ public final class MpmBlade {
                 plasticStrain[i] = unpackFloat(ep, i * 4);
             }
         }
-        folds = tag.getInt("folds");
-        carbonContent = tag.getFloat("carbon");
+        setFolds(tag.getInt("folds"));
+        setCarbonContent(tag.getFloat("carbon"));
 
         return true;
     }

@@ -71,11 +71,26 @@ public class ForgeProbeBlockEntity extends BlockEntity {
         setChanged();
     }
 
+    void thermalTick(net.minecraft.world.level.Level world, BlockPos pos) {
+        var support = world.getBlockState(pos.below());
+        boolean heating = support.is(net.minecraft.tags.BlockTags.FIRE)
+                || support.is(net.minecraft.world.level.block.Blocks.LAVA)
+                || ((support.getBlock() instanceof net.minecraft.world.level.block.AbstractFurnaceBlock
+                || support.getBlock() instanceof net.minecraft.world.level.block.CampfireBlock) && support.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.LIT)
+                && support.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.LIT));
+        if (solver.thermalStep(blade, .05F, heating ? 1300 : 20) && !world.isClientSide) setChanged();
+    }
+
     public void setForce(float force) {
         this.force = Math.max(0.05F, Math.min(1.0F, force));
     }
 
     // ---- 存档 ----
+
+    @Override
+    public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
+        return saveWithoutMetadata(registries);
+    }
 
     @Override
     protected void saveAdditional(CompoundTag tag, HolderLookup.Provider registries) {
