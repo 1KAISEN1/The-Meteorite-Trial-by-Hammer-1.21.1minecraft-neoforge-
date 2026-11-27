@@ -62,6 +62,22 @@ public final class MpmBlade {
     /** 累积塑性应变，用于冷作硬化。 */
     private final float[] plasticStrain = new float[COUNT];
 
+    /**
+     * 每个粒子的温度（绝对摄氏度）。
+     *
+     * <p>决定两件事：屈服强度（烧红了才锤得动）和颜色（黑体辐射）。</p>
+     */
+    private final float[] temperature = new float[COUNT];
+
+    /** 整把刀的折叠次数。层数 = 2^folds。重熔归零。 */
+    private int folds = 0;
+
+    /** 碳含量（0–1）。只对钢类主体有意义。 */
+    private float carbonContent = 0.0F;
+
+    /** 环境温度（°C）。散热时朝它衰减。 */
+    public static final float AMBIENT_C = 20.0F;
+
     // Hydrostatic pressure is independent of the isochoric deformation gradient.
     final float[] pressure = new float[COUNT];
     private final double initialVolume;
@@ -421,6 +437,26 @@ public final class MpmBlade {
         java.util.Arrays.fill(plasticStrain, 0.0F);
     }
 
+    public float temperature(int i) { return temperature[i]; }
+
+    public void setTemperature(int i, float celsius) {
+        temperature[i] = celsius;
+    }
+
+    /** 整把刀的折叠次数。层数 = 2^folds。 */
+    public int folds() { return folds; }
+
+    public void setFolds(int value) {
+        folds = Math.max(0, Math.min(16, value));
+    }
+
+    /** 碳含量（0–1），只对钢类主体有意义。 */
+    public float carbonContent() { return carbonContent; }
+
+    public void setCarbonContent(float value) {
+        carbonContent = Math.max(0.0F, Math.min(1.0F, value));
+    }
+
     public byte material(int i) { return material[i]; }
 
     public float deform(int i, int k) { return deform[i * 9 + k]; }
@@ -434,6 +470,12 @@ public final class MpmBlade {
         // 只存位置与材料；质量与形变可以从位置重建（原型阶段）
         tag.putByteArray("pos", packPositions());
         tag.putByteArray("mat", material.clone());
+
+        // 锻造状态：温度、折叠次数、碳含量
+        tag.putByteArray("temp", packTemperatures());
+        tag.putByteArray("ep", packPlasticStrain());
+        tag.putInt("folds", folds);
+        tag.putFloat("carbon", carbonContent);
         return tag;
     }
 
@@ -470,7 +512,25 @@ public final class MpmBlade {
                 plasticDeform[i * 9 + k] = (k % 4 == 0) ? 1.0F : 0.0F;
             }
             plasticStrain[i] = 0.0F;
+            temperature[i] = AMBIENT_C;
         }
+
+        // 可选字段：旧存档没有这些，缺了就保持默认
+        byte[] temp = tag.getByteArray("temp");
+        if (temp.length == COUNT * 4) {
+            for (int i = 0; i < COUNT; i++) {
+                temperature[i] = unpackFloat(temp, i * 4);
+            }
+        }
+        byte[] ep = tag.getByteArray("ep");
+        if (ep.length == COUNT * 4) {
+            for (int i = 0; i < COUNT; i++) {
+                plasticStrain[i] = unpackFloat(ep, i * 4);
+            }
+        }
+        folds = tag.getInt("folds");
+        carbonContent = tag.getFloat("carbon");
+
         return true;
     }
 
@@ -505,5 +565,39 @@ public final class MpmBlade {
     public static float unpackShort(byte[] in, int offset) {
         int q = ((in[offset] & 0xFF) << 8) | (in[offset + 1] & 0xFF);
         return SAVE_MIN + (q / 65535.0F) * SAVE_RANGE;
+    }
+
+    // ---- 温度 / 塑性应变的打包（4 字节 float，不做量化） ----
+
+    private byte[] packTemperatures() {
+        byte[] out = new byte[COUNT * 4];
+        for (int i = 0; i < COUNT; i++) {
+            packFloat(out, i * 4, temperature[i]);
+        }
+        return out;
+    }
+
+    private byte[] packPlasticStrain() {
+        byte[] out = new byte[COUNT * 4];
+        for (int i = 0; i < COUNT; i++) {
+            packFloat(out, i * 4, plasticStrain[i]);
+        }
+        return out;
+    }
+
+    private static void packFloat(byte[] out, int offset, float v) {
+        int bits = Float.floatToIntBits(v);
+        out[offset] = (byte) (bits >> 24);
+        out[offset + 1] = (byte) (bits >> 16);
+        out[offset + 2] = (byte) (bits >> 8);
+        out[offset + 3] = (byte) bits;
+    }
+
+    private static float unpackFloat(byte[] in, int offset) {
+        int bits = ((in[offset] & 0xFF) << 24)
+                | ((in[offset + 1] & 0xFF) << 16)
+                | ((in[offset + 2] & 0xFF) << 8)
+                | (in[offset + 3] & 0xFF);
+        return Float.intBitsToFloat(bits);
     }
 }
